@@ -36,13 +36,30 @@ def scan_once(conn, source, root) -> tuple[float, db.ScanCounts]:
     return time.perf_counter() - started, summary.counts
 
 
+def wait_until(condition, timeout_ms: int = 30_000) -> None:
+    """Wait inside a real event loop, like the app does, instead of a busy Python loop
+    that would hold the GIL and starve background threads."""
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    poll = QTimer()
+    poll.timeout.connect(lambda: condition() and loop.quit())
+    poll.start(5)
+    QTimer.singleShot(timeout_ms, loop.quit)
+    if not condition():
+        loop.exec()
+    poll.stop()
+
+
 def bench_ui(root: Path) -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    t0 = time.perf_counter()
     from PySide6.QtWidgets import QApplication
 
     from imagory.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
+    print(f"Qt and UI imports: {time.perf_counter() - t0:.3f}s")
     started = time.perf_counter()
     conn = db.open_database(paths.db_path(root))
     window = MainWindow(root, conn)
@@ -64,13 +81,17 @@ def bench_ui(root: Path) -> None:
 
     first_rows = visible_rows()
     photos = window.model.photos
-    while not all(window.loader._cache.get(photos[r].photo_id) for r in first_rows):
-        app.processEvents()
-        if time.perf_counter() - started > 30:
-            break
+    wait_until(lambda: all(window.loader._cache.get(photos[r].photo_id) for r in first_rows))
     first_screen = time.perf_counter() - started
     print(f"Model loaded ({len(photos):,} photos) in {model_ready:.3f}s")
     print(f"First screen ({len(first_rows)} thumbnails) visible in {first_screen:.3f}s")
+
+    total = conn.execute("SELECT COUNT(*) FROM files WHERE status = 'ok'").fetchone()[0]
+    wait_until(lambda: window.model.rowCount() >= total, timeout_ms=120_000)
+    print(
+        f"Whole grid ({window.model.rowCount():,} photos) loaded in "
+        f"{time.perf_counter() - started:.3f}s (in the background)"
+    )
 
     # Scroll cost, as an upper bound: every step forces a full viewport repaint, while real
     # scrolling only repaints the newly exposed strip. Thumbnail loads run concurrently.
