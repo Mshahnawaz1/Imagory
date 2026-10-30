@@ -147,7 +147,8 @@ Goal: prove the core loop end to end with minimal features: pick a folder, scan 
 ### 7.3 Browsing
 
 - **Grid:** a standard QListView in icon mode with no month headers. It is sorted newest first by `taken_at_local`, with ties broken by relative path. Thumbnails load lazily for the visible area (section 6.2).
-- **Viewer:** opens on double-click or Enter. It shows the image fitted to the window with EXIF orientation applied. Left and Right move to the previous and next photo in grid order, and Esc closes the viewer. A status line shows the filename, dimensions, date, and date source. Zoom, pan, and the info panel come in V1.
+- **Grid during a scan:** photos appear as each batch is committed, inserted at their place in grid order. When the scan ends, the grid reloads (hiding missing files) and keeps the photo you were looking at in view.
+- **Viewer:** opens on double-click or Enter. It shows the image fitted to the window with EXIF orientation applied. Left and Right move to the previous and next photo in grid order. A **Back to photos** button, Esc, Backspace, or the mouse back button returns to the grid. A status line shows the filename, dimensions, date, and date source. Zoom, pan, and the info panel come in V1.
 - **Help menu:** "Open log folder" (section 6.6).
 
 ### 7.4 Out of V0
@@ -384,6 +385,8 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Worker processes | Started with the `spawn` method on every platform, matching Windows |
 | Grid painting | Custom item delegate paints prepared pixmaps directly; thumbnails decode in C++ (`QImageReader`) on two loader threads to limit GIL contention with the UI |
 | Grid loading | The first 500 rows are queried directly (index-ordered, so the LIMIT stops early) and the rest load on a background read-only thread, to meet the 1-second first screen at 100,000 photos |
+| Grid during a scan | The scan coordinator reports the grid rows of each committed batch to the UI (a signal, no UI database access); the grid inserts them in sorted order. A 200-photo batch costs about 45 ms of UI time on a 100,000-photo grid |
+| Leaving the viewer | A visible Back button, because Esc alone was not discoverable (found testing the Windows .exe) |
 
 ## 17. Risks
 

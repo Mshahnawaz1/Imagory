@@ -16,9 +16,11 @@ albums, and search are planned for V1 (see [PRD.md](PRD.md)).
 ## Using Imagory
 
 1. Start Imagory and click **Choose folder…**. Imagory scans the folder and its subfolders
-   in the background. You can cancel at any time, and **Rescan** picks up where it stopped.
+   in the background, and photos appear in the grid as they are processed. You can cancel
+   at any time, and **Rescan** picks up where it stopped.
 2. Double-click a thumbnail (or press Enter) to open the viewer. **Left** and **Right** move
-   between photos and **Esc** goes back to the grid.
+   between photos. **Back to photos** (or Esc, Backspace, or the mouse back button) returns
+   to the grid.
 3. **Rescan** finds new, changed, and missing photos. Unchanged photos are skipped, so it is
    quick. Missing photos are hidden, not forgotten. They come back if the file returns.
 4. **Change folder…** switches to a different folder. Imagory forgets the old folder's

@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QModelIndex, QPoint, Qt, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 PAGE_EMPTY, PAGE_GRID, PAGE_VIEWER = range(3)
 # Rows loaded synchronously at startup: more than a 4K screen of thumbnails holds.
 FIRST_PAGE = 500
+CELL_PROBE = 4  # pixels into the grid, to find the top-left cell
 
 
 def summary_text(summary: ScanSummary) -> str:
@@ -90,6 +91,7 @@ class MainWindow(QMainWindow):
         self.scan_thread: ScanThread | None = None
         self._grid_token = 0
         self._grid_threads: set[GridQueryThread] = set()
+        self._anchor_id: int | None = None  # photo to keep in view across a grid reload
         self._closing = False
 
         self.setWindowTitle("Imagory")
@@ -99,6 +101,7 @@ class MainWindow(QMainWindow):
         self.model = PhotoGridModel(self.loader, self)
         self.grid = PhotoGridView(self)
         self.grid.setModel(self.model)
+        self.model.rowsInserted.connect(self._on_rows_inserted)
         self.grid.open_requested.connect(self.open_viewer)
         self.viewer = PhotoViewer(self)
         self.viewer.closed.connect(self.close_viewer)
@@ -166,6 +169,7 @@ class MainWindow(QMainWindow):
         The first screen is queried directly; the rest loads on a background thread.
         """
         self._grid_token += 1
+        self._anchor_id = self._current_anchor()
         if self.source is None:
             self.model.set_photos([], None)
             self.pages.setCurrentIndex(PAGE_EMPTY)
@@ -174,6 +178,7 @@ class MainWindow(QMainWindow):
             return
         photos = db.grid_photos(self.conn, self.source.id, limit=FIRST_PAGE)
         self.model.set_photos(photos, Path(self.source.root_path))
+        self._restore_anchor()
         if len(photos) == FIRST_PAGE:
             self._load_rest_of_grid(len(photos))
         if self.pages.currentIndex() != PAGE_VIEWER:
@@ -198,7 +203,40 @@ class MainWindow(QMainWindow):
         if token != self._grid_token or self._closing:
             return  # the grid was reloaded in the meantime
         self.model.append_photos(photos)
+        self._restore_anchor()
+        self._anchor_id = None  # the whole grid is loaded: a photo not found is gone
         self._show_photo_count()
+
+    def _current_anchor(self) -> int | None:
+        """The open photo, or the photo at the top left of the grid."""
+        if self.pages.currentIndex() == PAGE_VIEWER:
+            return self.viewer.current_photo_id()
+        if self.pages.currentIndex() != PAGE_GRID or self.model.rowCount() == 0:
+            return None
+        index = self.grid.indexAt(QPoint(CELL_PROBE, CELL_PROBE))
+        if not index.isValid() or index.row() == 0:
+            return None  # at the top already: stay there
+        return self.model.photos[index.row()].photo_id
+
+    def _restore_anchor(self) -> None:
+        if self._anchor_id is None:
+            return
+        row = self.model.row_of(self._anchor_id)
+        if row is None:
+            return  # not loaded yet (or gone)
+        self._anchor_id = None
+        if self.pages.currentIndex() == PAGE_VIEWER:
+            self.viewer.rebind(self.model.photos, row)
+        else:
+            self.grid.scrollTo(self.model.index(row), PhotoGridView.ScrollHint.PositionAtTop)
+
+    def _on_rows_inserted(self, parent: QModelIndex, first: int, last: int) -> None:
+        if self.pages.currentIndex() == PAGE_VIEWER and self.viewer.photos is self.model.photos:
+            self.viewer.rows_inserted(first, last - first + 1)
+
+    def _on_scan_added(self, photos: list) -> None:
+        if not self._closing:
+            self.model.insert_photos(photos)
 
     def _show_photo_count(self) -> None:
         if self.source is not None and not self.scanning:
@@ -291,6 +329,7 @@ class MainWindow(QMainWindow):
         assert self.source is not None and self.scan_thread is None
         thread = ScanThread(self.db_file, self.source, self.thumbs_root, self.library_root, self)
         thread.progressed.connect(self._on_progress)
+        thread.added.connect(self._on_scan_added)
         thread.succeeded.connect(self._on_scan_succeeded)
         thread.failed.connect(self._on_scan_failed)
         thread.finished.connect(self._on_scan_thread_finished)

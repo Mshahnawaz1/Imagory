@@ -50,6 +50,31 @@ def format_date(taken_at_local: str | None) -> str:
     return taken_at_local.replace("T", " ") if taken_at_local else "Unknown date"
 
 
+def sorts_before(a: GridPhoto, b: GridPhoto) -> bool:
+    """Grid order, as in ``db.grid_photos``: newest first, no date last, then by path."""
+    if a.taken_at_local != b.taken_at_local:
+        if a.taken_at_local is None:
+            return False
+        if b.taken_at_local is None:
+            return True
+        return a.taken_at_local > b.taken_at_local
+    # NOCASE in SQLite folds ASCII only; lower() can differ for other letters, and the
+    # full reload after the scan settles any difference.
+    return a.relative_path.lower() < b.relative_path.lower()
+
+
+def insertion_index(photos: list[GridPhoto], photo: GridPhoto) -> int:
+    """Where ``photo`` goes in the grid-ordered ``photos`` (after equal entries)."""
+    lo, hi = 0, len(photos)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if sorts_before(photo, photos[mid]):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
 class _LoaderSignals(QObject):
     loaded = Signal(int, int, QImage)  # generation, photo id, image (null on failure)
 
@@ -183,7 +208,7 @@ class PhotoGridModel(QAbstractListModel):
         super().__init__(parent)
         self.loader = loader
         self.photos: list[GridPhoto] = []
-        self._rows: dict[int, int] = {}
+        self._row_index: dict[int, int] | None = {}  # photo id -> row; None until rebuilt
         self._broken = QPixmap(ICON_SIZE, ICON_SIZE)
         self._broken.fill(QColor(120, 120, 120, 80))
         loader.ready.connect(self._on_ready)
@@ -192,11 +217,19 @@ class PhotoGridModel(QAbstractListModel):
         self.beginResetModel()
         self.loader.reset(source_root)
         self.photos = photos
-        self._rows = {p.photo_id: i for i, p in enumerate(photos)}
+        self._row_index = None
         self.endResetModel()
+
+    @property
+    def _rows(self) -> dict[int, int]:
+        if self._row_index is None:
+            self._row_index = {p.photo_id: i for i, p in enumerate(self.photos)}
+        return self._row_index
 
     def append_photos(self, photos: list[GridPhoto]) -> None:
         """Add the rest of the library after the first screen has been shown."""
+        # A scan may already have inserted some of these.
+        photos = [p for p in photos if p.photo_id not in self._rows]
         if not photos:
             return
         first = len(self.photos)
@@ -205,6 +238,21 @@ class PhotoGridModel(QAbstractListModel):
         self.photos.extend(photos)
         self._rows.update((p.photo_id, first + i) for i, p in enumerate(photos))
         self.endInsertRows()
+
+    def insert_photos(self, photos: list[GridPhoto]) -> None:
+        """Insert photos a running scan just added, each at its place in grid order."""
+        photos = [p for p in photos if p.photo_id not in self._rows]
+        if not photos:
+            return
+        for photo in photos:
+            row = insertion_index(self.photos, photo)
+            self.beginInsertRows(QModelIndex(), row, row)
+            self.photos.insert(row, photo)  # in place: the viewer holds this list
+            self.endInsertRows()
+        self._row_index = None  # rows after each insertion point moved
+
+    def row_of(self, photo_id: int) -> int | None:
+        return self._rows.get(photo_id)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
         return 0 if parent.isValid() else len(self.photos)

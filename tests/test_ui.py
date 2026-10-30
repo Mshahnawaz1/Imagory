@@ -160,3 +160,53 @@ def test_large_grid_loads_first_page_then_rest(qtbot, tmp_path, no_dialogs, monk
     assert expected[0] == "011.jpg"
     window.close()
     conn.close()
+
+
+def test_back_button_and_keys_close_viewer(qtbot, photos, no_dialogs):
+    window, conn = open_window(qtbot)
+    window.set_folder(photos)
+    wait_scan(qtbot, window)
+    for close in (
+        lambda: qtbot.mouseClick(window.viewer.back_button, Qt.MouseButton.LeftButton),
+        lambda: qtbot.keyClick(window.viewer, Qt.Key.Key_Backspace),
+        lambda: qtbot.mouseClick(window.viewer.canvas, Qt.MouseButton.BackButton),
+    ):
+        window.open_viewer(2)
+        assert window.pages.currentIndex() == mw.PAGE_VIEWER
+        close()
+        assert window.pages.currentIndex() == mw.PAGE_GRID
+        assert window.grid.currentIndex().row() == 2
+    window.close()
+    conn.close()
+
+
+def test_scan_batches_appear_in_grid_order_and_viewer_keeps_photo(qtbot, photos, no_dialogs):
+    window, conn = open_window(qtbot)
+    window.set_folder(photos)
+    wait_scan(qtbot, window)
+    by_name = {p.relative_path: p for p in window.model.photos}
+    # Pretend the scan had only committed mid.png so far, with the viewer open on it.
+    window.model.set_photos([by_name["mid.png"]], photos)
+    window.open_viewer(0)
+    window._on_scan_added([by_name["old.jpg"], by_name["new.jpg"]])
+    assert [p.relative_path for p in window.model.photos] == ["new.jpg", "mid.png", "old.jpg"]
+    assert window.viewer.row == 1 and "mid.png" in window.viewer.status.text()
+    assert "2 of 3" in window.viewer.status.text()
+    window._on_scan_added([by_name["new.jpg"]])  # already shown: ignored
+    assert window.model.rowCount() == 3
+    window.close()
+    conn.close()
+
+
+def test_rescan_reload_keeps_open_photo(qtbot, photos, no_dialogs):
+    window, conn = open_window(qtbot)
+    window.set_folder(photos)
+    wait_scan(qtbot, window)
+    window.open_viewer(1)
+    window.rescan()
+    wait_scan(qtbot, window)
+    assert window.pages.currentIndex() == mw.PAGE_VIEWER
+    assert window.viewer.photos is window.model.photos
+    assert "mid.png" in window.viewer.status.text()
+    window.close()
+    conn.close()

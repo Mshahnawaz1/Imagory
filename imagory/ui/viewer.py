@@ -1,4 +1,7 @@
-"""Photo viewer: fit to window, EXIF orientation applied, Left/Right to move, Esc to close."""
+"""Photo viewer: fit to window, EXIF orientation applied, Left/Right to move.
+
+Back (button, Esc, Backspace, or the mouse back button) returns to the grid.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +9,15 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRect, QRunnable, QSize, Qt, QThreadPool, Signal
-from PySide6.QtGui import QImage, QKeyEvent, QPainter, QPalette, QPixmap
-from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtGui import QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPixmap
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from imagory.db import GridPhoto
 from imagory.ui.grid import display_name, format_date
@@ -90,14 +100,21 @@ class PhotoViewer(QWidget):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.canvas = ImageCanvas(self)
+        self.back_button = QPushButton("\u2190 Back to photos", self)
+        self.back_button.setToolTip("Back to the grid (Esc)")
+        self.back_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keep arrow keys here
+        self.back_button.clicked.connect(self.close_viewer)
         self.status = QLabel(self)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.status.setContentsMargins(8, 4, 8, 4)
+        top = QHBoxLayout()
+        top.setContentsMargins(8, 4, 8, 4)
+        top.addWidget(self.back_button)
+        top.addWidget(self.status, 1)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        layout.addLayout(top)
         layout.addWidget(self.canvas, 1)
-        layout.addWidget(self.status)
         self._photos: list[GridPhoto] = []
         self._source_root: Path | None = None
         self._row = -1
@@ -110,6 +127,30 @@ class PhotoViewer(QWidget):
     @property
     def row(self) -> int:
         return self._row
+
+    @property
+    def photos(self) -> list[GridPhoto]:
+        return self._photos
+
+    def current_photo_id(self) -> int | None:
+        return self._photos[self._row].photo_id if 0 <= self._row < len(self._photos) else None
+
+    def rebind(self, photos: list[GridPhoto], row: int) -> None:
+        """Point at a reloaded grid list, where the photo showing is now at ``row``."""
+        self._photos = photos
+        self._row = row
+        self._update_status(photos[row])
+
+    def close_viewer(self) -> None:
+        self.closed.emit(self._row)
+
+    def rows_inserted(self, first: int, count: int) -> None:
+        """The grid list grew (a scan is running): keep showing the same photo."""
+        if not self._photos or self._row < 0:
+            return
+        if first <= self._row:
+            self._row += count
+        self._update_status(self._photos[self._row])
 
     def show_photo(self, photos: list[GridPhoto], source_root: Path, row: int) -> None:
         self._photos = photos
@@ -153,8 +194,8 @@ class PhotoViewer(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
-        if key == Qt.Key.Key_Escape:
-            self.closed.emit(self._row)
+        if key in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace, Qt.Key.Key_Back):
+            self.close_viewer()
         elif key == Qt.Key.Key_Right:
             if self._row < len(self._photos) - 1:
                 self._go(self._row + 1)
@@ -163,3 +204,9 @@ class PhotoViewer(QWidget):
                 self._go(self._row - 1)
         else:
             super().keyPressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.BackButton:
+            self.close_viewer()
+        else:
+            super().mouseReleaseEvent(event)
