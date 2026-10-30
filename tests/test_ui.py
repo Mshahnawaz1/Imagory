@@ -144,3 +144,19 @@ def test_summary_text():
     text = mw.summary_text(summary)
     assert "Added: 5" in text and "Errors (unreadable files): 1" in text
     assert "Skipped (not supported): 4 (.mp4 3, .txt 1)" in text
+
+
+def test_large_grid_loads_first_page_then_rest(qtbot, tmp_path, no_dialogs, monkeypatch):
+    monkeypatch.setattr(mw, "FIRST_PAGE", 5)
+    src = tmp_path / "many"
+    for i in range(12):
+        make_image(src / f"{i:03}.jpg", (16, 16), taken=f"2020:01:{i + 1:02} 00:00:00")
+    window, conn = open_window(qtbot)
+    window.set_folder(src)
+    wait_scan(qtbot, window)
+    qtbot.waitUntil(lambda: window.model.rowCount() == 12)
+    expected = [p.relative_path for p in db.grid_photos(conn, window.source.id)]
+    assert [p.relative_path for p in window.model.photos] == expected
+    assert expected[0] == "011.jpg"
+    window.close()
+    conn.close()

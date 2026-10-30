@@ -116,3 +116,12 @@ def test_settings_roundtrip(conn):
     db.set_setting(conn, "k", "1")
     db.set_setting(conn, "k", "2")
     assert db.get_setting(conn, "k") == "2"
+
+
+def test_grid_photos_paging(conn):
+    src = db.create_source(conn, "/photos", "photos")
+    now = db.utc_now()
+    for i in range(5):
+        db.insert_file(conn, src.id, _record(f"{i}.jpg", f"2020-01-0{i + 1}T00:00:00"), now)
+    full = db.grid_photos(conn, src.id)
+    assert db.grid_photos(conn, src.id, limit=2) + db.grid_photos(conn, src.id, offset=2) == full

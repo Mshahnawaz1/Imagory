@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections import OrderedDict
 from pathlib import Path
 
@@ -68,7 +69,9 @@ class _LoadTask(QRunnable):
         # Regenerates the thumbnail from the source file if the cache entry was deleted.
         path = thumbs.ensure_thumbnail(self.source_root, self.thumbs_root, self.rel)
         image = load_thumbnail(path, self.size) if path else QImage()
-        self.signals.loaded.emit(self.generation, self.photo_id, image)
+        # The loader may have been destroyed while this task ran (shutdown).
+        with contextlib.suppress(RuntimeError):
+            self.signals.loaded.emit(self.generation, self.photo_id, image)
 
 
 def load_thumbnail(path: Path, size: int) -> QImage:
@@ -191,6 +194,17 @@ class PhotoGridModel(QAbstractListModel):
         self.photos = photos
         self._rows = {p.photo_id: i for i, p in enumerate(photos)}
         self.endResetModel()
+
+    def append_photos(self, photos: list[GridPhoto]) -> None:
+        """Add the rest of the library after the first screen has been shown."""
+        if not photos:
+            return
+        first = len(self.photos)
+        self.beginInsertRows(QModelIndex(), first, first + len(photos) - 1)
+        # Extend in place: the viewer holds a reference to this list.
+        self.photos.extend(photos)
+        self._rows.update((p.photo_id, first + i) for i, p in enumerate(photos))
+        self.endInsertRows()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
         return 0 if parent.isValid() else len(self.photos)

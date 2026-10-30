@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 log = logging.getLogger(__name__)
 
@@ -420,8 +421,8 @@ def scan_runs(conn: sqlite3.Connection, source_id: int) -> list[sqlite3.Row]:
 # --- browsing ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class GridPhoto:
+class GridPhoto(NamedTuple):
+    # A NamedTuple, not a dataclass: building 100,000 of them must stay fast.
     photo_id: int
     relative_path: str
     width: int | None
@@ -431,18 +432,24 @@ class GridPhoto:
     date_source: str | None
 
 
-def grid_photos(conn: sqlite3.Connection, source_id: int) -> list[GridPhoto]:
-    """Visible photos, newest first, ties broken by relative path. Missing files are hidden."""
-    return [
-        GridPhoto(*row)
-        for row in conn.execute(
-            "SELECT p.id, f.relative_path, p.width, p.height, p.format, p.taken_at_local, "
-            "p.date_source FROM photos p JOIN files f ON f.id = p.primary_file_id "
-            "WHERE f.source_id = ? AND f.status = 'ok' "
-            "ORDER BY p.taken_at_local DESC, f.relative_path",
-            (source_id,),
-        )
-    ]
+def grid_photos(
+    conn: sqlite3.Connection, source_id: int, limit: int | None = None, offset: int = 0
+) -> list[GridPhoto]:
+    """Visible photos, newest first, ties broken by relative path. Missing files are hidden.
+
+    ``limit`` and ``offset`` let the grid show its first screen before loading the rest.
+    """
+    cur = conn.cursor()
+    cur.row_factory = None  # plain tuples are much cheaper than sqlite3.Row here
+    cur.execute(
+        "SELECT p.id, f.relative_path, p.width, p.height, p.format, p.taken_at_local, "
+        # CROSS JOIN makes SQLite walk photos in taken_at_local order, so a LIMIT stops early.
+        "p.date_source FROM photos p CROSS JOIN files f ON f.id = p.primary_file_id "
+        "WHERE f.source_id = ? AND f.status = 'ok' "
+        "ORDER BY p.taken_at_local DESC, f.relative_path LIMIT ? OFFSET ?",
+        (source_id, -1 if limit is None else limit, offset),
+    )
+    return list(map(GridPhoto._make, cur))
 
 
 # --- settings ---------------------------------------------------------------------------

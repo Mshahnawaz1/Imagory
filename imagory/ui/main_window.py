@@ -24,12 +24,15 @@ from PySide6.QtWidgets import (
 from imagory import __version__, db, paths, thumbs
 from imagory.scanner import Progress, ScanSummary
 from imagory.ui.grid import PhotoGridModel, PhotoGridView, ThumbnailLoader
+from imagory.ui.grid_query import GridQueryThread
 from imagory.ui.scan_thread import ScanThread
 from imagory.ui.viewer import PhotoViewer
 
 log = logging.getLogger(__name__)
 
 PAGE_EMPTY, PAGE_GRID, PAGE_VIEWER = range(3)
+# Rows loaded synchronously at startup: more than a 4K screen of thumbnails holds.
+FIRST_PAGE = 500
 
 
 def summary_text(summary: ScanSummary) -> str:
@@ -85,6 +88,8 @@ class MainWindow(QMainWindow):
         self.conn = conn
         self.source: db.Source | None = db.get_source(conn)
         self.scan_thread: ScanThread | None = None
+        self._grid_token = 0
+        self._grid_threads: set[GridQueryThread] = set()
         self._closing = False
 
         self.setWindowTitle("Imagory")
@@ -156,21 +161,50 @@ class MainWindow(QMainWindow):
     # --- grid ---------------------------------------------------------------------------
 
     def reload_grid(self) -> None:
-        """Show the library straight from the database. Never starts a scan."""
+        """Show the library straight from the database. Never starts a scan.
+
+        The first screen is queried directly; the rest loads on a background thread.
+        """
+        self._grid_token += 1
         if self.source is None:
             self.model.set_photos([], None)
             self.pages.setCurrentIndex(PAGE_EMPTY)
             self._update_actions()
             self.status_label.setText("")
             return
-        photos = db.grid_photos(self.conn, self.source.id)
+        photos = db.grid_photos(self.conn, self.source.id, limit=FIRST_PAGE)
         self.model.set_photos(photos, Path(self.source.root_path))
+        if len(photos) == FIRST_PAGE:
+            self._load_rest_of_grid(len(photos))
         if self.pages.currentIndex() != PAGE_VIEWER:
             self.pages.setCurrentIndex(PAGE_GRID)
         self.setWindowTitle(f"Imagory - {self.source.root_path}")
         self._update_actions()
-        if not self.scanning:
-            self.status_label.setText(f"{len(photos):,} photos in {self.source.root_path}")
+        self._show_photo_count()
+
+    def _load_rest_of_grid(self, offset: int) -> None:
+        assert self.source is not None
+        thread = GridQueryThread(self.db_file, self.source.id, offset, self._grid_token, self)
+        thread.loaded.connect(self._on_rest_of_grid)
+        thread.finished.connect(lambda: self._grid_thread_done(thread))
+        self._grid_threads.add(thread)
+        thread.start()
+
+    def _grid_thread_done(self, thread: GridQueryThread) -> None:
+        self._grid_threads.discard(thread)
+        thread.deleteLater()
+
+    def _on_rest_of_grid(self, token: int, photos: list) -> None:
+        if token != self._grid_token or self._closing:
+            return  # the grid was reloaded in the meantime
+        self.model.append_photos(photos)
+        self._show_photo_count()
+
+    def _show_photo_count(self) -> None:
+        if self.source is not None and not self.scanning:
+            self.status_label.setText(
+                f"{self.model.rowCount():,} photos in {self.source.root_path}"
+            )
 
     def open_viewer(self, row: int) -> None:
         if self.source is None or not 0 <= row < len(self.model.photos):
@@ -315,10 +349,7 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         self._update_actions()
-        if self.source is not None:
-            self.status_label.setText(
-                f"{self.model.rowCount():,} photos in {self.source.root_path}"
-            )
+        self._show_photo_count()
 
     # --- help ---------------------------------------------------------------------------
 
@@ -347,6 +378,8 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Stopping scan…")
             self.scan_thread.cancel()
             self.scan_thread.wait()  # in-flight results are committed before it exits
+        for thread in list(self._grid_threads):
+            thread.wait()
         self.loader.reset(None)
         self.loader.wait()
         super().closeEvent(event)
