@@ -28,11 +28,11 @@ Tick each box when the task is implemented, tested, and committed.
 - [ ] Unit tests for walk rules and diff
 
 ## 5. Metadata and thumbnails (`imagory/metadata.py`, `imagory/thumbs.py`)
-- [ ] Read dimensions, format, EXIF `DateTimeOriginal`, orientation; HEIC via pillow-heif
-- [ ] Date fallback: EXIF, else mtime converted to local time; `date_source` `exif`/`mtime`
-- [ ] Thumbnail: 320 px, JPEG q85, EXIF transpose, draft mode for JPEG, first GIF frame, `thumbs/ab/cd/<blake2b(relpath)>.jpg`
-- [ ] Single-pass worker function returning a picklable result; errors returned, never raised
-- [ ] Unit tests (date fallback, orientation, thumbnail path/size, corrupt file)
+- [x] Read dimensions, format, EXIF `DateTimeOriginal`, orientation; HEIC via pillow-heif
+- [x] Date fallback: EXIF, else mtime converted to local time; `date_source` `exif`/`mtime`
+- [x] Thumbnail: 320 px, JPEG q85, EXIF transpose, draft mode for JPEG, first GIF frame, `thumbs/ab/cd/<blake2b(relpath)>.jpg`
+- [x] Single-pass worker function returning a picklable result; errors returned, never raised
+- [x] Unit tests (date fallback, orientation, thumbnail path/size, corrupt file)
 
 ## 6. Scan coordinator (`imagory/scanner.py`)
 - [ ] `Scanner.run()`: walk, diff, process in `ProcessPoolExecutor` (CPU-1), apply in ~200-file transactions, mark missing, record `scan_runs`
