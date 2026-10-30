@@ -11,6 +11,7 @@ import io
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -87,9 +88,21 @@ def make_thumbnail(img: Image.Image, dest: Path) -> None:
     tmp = dest.with_name(f"{dest.stem}.{os.getpid()}.tmp")
     try:
         img.save(tmp, "JPEG", quality=THUMB_QUALITY)
-        os.replace(tmp, dest)
+        _replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _replace(src: Path, dest: Path, attempts: int = 5) -> None:
+    # On Windows the replace fails while the grid is reading the old thumbnail; retry briefly.
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dest)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 @dataclass(frozen=True)

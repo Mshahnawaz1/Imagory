@@ -194,6 +194,7 @@ class Scanner:
         commit_batch: int = COMMIT_BATCH,
         worker_batch: int = WORKER_BATCH,
         progress: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self.conn = conn
         self.source = source
@@ -203,7 +204,7 @@ class Scanner:
         self.commit_batch = commit_batch
         self.worker_batch = worker_batch
         self._progress = progress or (lambda p: None)
-        self._cancel = threading.Event()
+        self._cancel = cancel_event or threading.Event()
 
     def cancel(self) -> None:
         """Stop queueing new work; in-flight results are still committed."""

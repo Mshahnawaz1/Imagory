@@ -40,13 +40,13 @@ Tick each box when the task is implemented, tested, and committed.
 - [x] Integration tests for PRD §7.5 items 2–5 (rows, no-op rescan, 1 updated + 1 missing, cancel/resume, corrupt image, source unchanged)
 
 ## 7. UI (`imagory/ui/`)
-- [ ] Main window: empty state with "Choose folder", toolbar (Rescan, Change folder), Help menu ("Open log folder", About with MIT licence)
-- [ ] Scan `QThread` wrapping the coordinator, progress bar + Cancel, summary dialog
-- [ ] Grid: `QListView` icon mode, model from DB (newest first, ties by path), lazy thumbnail loading via `QThreadPool`, size-limited cache, on-demand regeneration
-- [ ] Viewer: fit to window, EXIF orientation, Left/Right/Esc, status line
-- [ ] Change folder: confirm, delete source rows and thumbnails, scan new folder
-- [ ] Later launches show grid from DB without scanning
-- [ ] Offscreen smoke test
+- [x] Main window: empty state with "Choose folder", toolbar (Rescan, Change folder), Help menu ("Open log folder", About with MIT licence)
+- [x] Scan `QThread` wrapping the coordinator, progress bar + Cancel, summary dialog
+- [x] Grid: `QListView` icon mode, model from DB (newest first, ties by path), lazy thumbnail loading via `QThreadPool`, size-limited cache, on-demand regeneration
+- [x] Viewer: fit to window, EXIF orientation, Left/Right/Esc, status line
+- [x] Change folder: confirm, delete source rows and thumbnails, scan new folder
+- [x] Later launches show grid from DB without scanning
+- [x] Offscreen smoke test
 
 ## 8. Performance (PRD §7.5 item 6, §10)
 - [ ] `scripts/make_fake_library.py`: 100,000 small images with varied EXIF dates and a share of exact duplicates
