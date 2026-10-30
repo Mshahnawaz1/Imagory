@@ -8,4 +8,5 @@ dist/
 *.egg-info/
 # local dev library (IMAGORY_LIBRARY) and generated fake libraries
 .dev-library/
-.fake-library/
+.fake-library*/
+.bench-library/

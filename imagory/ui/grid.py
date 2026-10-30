@@ -9,14 +9,29 @@ from PySide6.QtCore import (
     QAbstractListModel,
     QModelIndex,
     QObject,
+    QPointF,
     QRunnable,
     QSize,
     Qt,
     QThreadPool,
     Signal,
 )
-from PySide6.QtGui import QColor, QImage, QKeyEvent, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QListView
+from PySide6.QtGui import (
+    QColor,
+    QImage,
+    QImageReader,
+    QKeyEvent,
+    QPainter,
+    QPalette,
+    QPixmap,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QListView,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+)
 
 from imagory import thumbs
 from imagory.db import GridPhoto
@@ -52,15 +67,24 @@ class _LoadTask(QRunnable):
     def run(self) -> None:
         # Regenerates the thumbnail from the source file if the cache entry was deleted.
         path = thumbs.ensure_thumbnail(self.source_root, self.thumbs_root, self.rel)
-        image = QImage(str(path)) if path else QImage()
-        if not image.isNull() and max(image.width(), image.height()) > self.size:
-            image = image.scaled(
-                self.size,
-                self.size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        image = load_thumbnail(path, self.size) if path else QImage()
         self.signals.loaded.emit(self.generation, self.photo_id, image)
+
+
+def load_thumbnail(path: Path, size: int) -> QImage:
+    """Decode a cached thumbnail at display size, almost entirely in C++.
+
+    Qt releases the GIL while reading, so loader threads barely stall the UI thread.
+    """
+    reader = QImageReader(str(path))
+    original = reader.size()
+    if original.isValid() and max(original.width(), original.height()) > size:
+        reader.setScaledSize(original.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio))
+    image = reader.read()
+    if image.isNull():
+        return image
+    # RGB32 is the raster engine's native format, so painting needs no conversion.
+    return image.convertToFormat(QImage.Format.Format_RGB32)
 
 
 class ThumbnailLoader(QObject):
@@ -75,7 +99,7 @@ class ThumbnailLoader(QObject):
         self.pixel_size = round(ICON_SIZE * device_pixel_ratio)
         self.source_root: Path | None = None
         self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(max(2, min(4, QThreadPool.globalInstance().maxThreadCount())))
+        self._pool.setMaxThreadCount(2)  # more threads only add GIL contention with the UI
         self._cache: OrderedDict[int, QPixmap] = OrderedDict()
         self._failed: set[int] = set()
         self._pending: set[int] = set()
@@ -142,14 +166,21 @@ class ThumbnailLoader(QObject):
         self.ready.emit(photo_id)
 
 
+# Looked up once: data() and paint() run hundreds of times per frame while scrolling.
+_DECORATION = Qt.ItemDataRole.DecorationRole
+_TOOLTIP = Qt.ItemDataRole.ToolTipRole
+_ACCESSIBLE = Qt.ItemDataRole.AccessibleTextRole
+_SELECTED = QStyle.StateFlag.State_Selected
+_FOCUSED = QStyle.StateFlag.State_HasFocus
+_HIGHLIGHT = QPalette.ColorRole.Highlight
+
+
 class PhotoGridModel(QAbstractListModel):
     def __init__(self, loader: ThumbnailLoader, parent=None) -> None:
         super().__init__(parent)
         self.loader = loader
         self.photos: list[GridPhoto] = []
         self._rows: dict[int, int] = {}
-        self._placeholder = QPixmap(ICON_SIZE, ICON_SIZE)
-        self._placeholder.fill(QColor(0, 0, 0, 0))
         self._broken = QPixmap(ICON_SIZE, ICON_SIZE)
         self._broken.fill(QColor(120, 120, 120, 80))
         loader.ready.connect(self._on_ready)
@@ -164,26 +195,61 @@ class PhotoGridModel(QAbstractListModel):
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
         return 0 if parent.isValid() else len(self.photos)
 
+    def thumbnail(self, row: int) -> QPixmap | None:
+        """The cached thumbnail for ``row``, queueing a load if needed (None until ready)."""
+        photo = self.photos[row]
+        pix = self.loader.pixmap(photo)
+        if pix is None and self.loader.has_failed(photo.photo_id):
+            return self._broken
+        return pix
+
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        photo = self.photos[index.row()]
-        if role == Qt.ItemDataRole.DecorationRole:
-            pix = self.loader.pixmap(photo)
-            if pix is not None:
-                return pix
-            return self._broken if self.loader.has_failed(photo.photo_id) else self._placeholder
-        if role == Qt.ItemDataRole.ToolTipRole:
+        if role == _DECORATION:
+            return self.thumbnail(index.row())
+        if role == _TOOLTIP:
+            photo = self.photos[index.row()]
             return f"{photo.relative_path}\n{format_date(photo.taken_at_local)}"
-        if role == Qt.ItemDataRole.AccessibleTextRole:
-            return display_name(photo)
+        if role == _ACCESSIBLE:
+            return display_name(self.photos[index.row()])
         return None
 
     def _on_ready(self, photo_id: int) -> None:
         row = self._rows.get(photo_id)
         if row is not None:
             index = self.index(row)
-            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DecorationRole])
+            self.dataChanged.emit(index, index, [_DECORATION])
+
+
+class ThumbnailDelegate(QStyledItemDelegate):
+    """Paints the prepared thumbnail pixmap directly, centred in its cell.
+
+    The default delegate turns every pixmap into a QIcon and rescales it on each paint,
+    which is far too slow for smooth scrolling.
+    """
+
+    def __init__(self, model: PhotoGridModel, parent=None) -> None:
+        super().__init__(parent)
+        self._model = model
+        side = ICON_SIZE + CELL_PADDING * 2
+        self._size = QSize(side, side)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        rect = option.rect
+        state = option.state
+        if state & _SELECTED:
+            painter.fillRect(rect, option.palette.color(_HIGHLIGHT))
+        pix = self._model.thumbnail(index.row())
+        if pix is not None:
+            ratio = pix.devicePixelRatio()
+            x = rect.x() + (rect.width() - pix.width() / ratio) / 2
+            y = rect.y() + (rect.height() - pix.height() / ratio) / 2
+            painter.drawPixmap(QPointF(x, y), pix)
+        if state & _FOCUSED:
+            painter.setPen(option.palette.color(_HIGHLIGHT))
+            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        return self._size
 
 
 class PhotoGridView(QListView):
@@ -207,6 +273,11 @@ class PhotoGridView(QListView):
         self.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.doubleClicked.connect(lambda index: self.open_requested.emit(index.row()))
         self.verticalScrollBar().valueChanged.connect(self._on_scrolled)
+
+    def setModel(self, model) -> None:
+        super().setModel(model)
+        if isinstance(model, PhotoGridModel):
+            self.setItemDelegate(ThumbnailDelegate(model, self))
 
     def _on_scrolled(self) -> None:
         model = self.model()
