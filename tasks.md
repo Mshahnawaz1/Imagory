@@ -19,13 +19,13 @@ Tick each box when the task is implemented, tested, and committed.
 - [x] Connection setup: WAL, `foreign_keys=ON`, `synchronous=NORMAL`
 - [x] Migration framework on `PRAGMA user_version`, each step in a transaction, `.bak` copy before migrating an existing DB
 - [x] Migration 1: V1 core schema (`sources`, `files`, `photos`, `scan_runs`, `settings`) and indexes (PRD §9)
-- [ ] Queries: source create/get/delete, file state for diff, apply batch (insert/update file + photo), mark missing, scan_runs, grid listing
+- [x] Queries: source create/get/delete, file state for diff, apply batch (insert/update file + photo), mark missing, scan_runs, grid listing
 - [x] Unit tests: new DB at current version, pragmas, backup, source delete
 
 ## 4. Walk and diff (`imagory/scanner.py`, pure functions)
-- [ ] `walk_source`: `os.scandir`, no symlinks/junctions, skip `.`/`$`/`System Volume Information`/library folder, case-insensitive extensions, skipped-by-extension counts
-- [ ] `diff`: new / changed / unchanged / disappeared (+ reappeared missing files)
-- [ ] Unit tests for walk rules and diff
+- [x] `walk_source`: `os.scandir`, no symlinks/junctions, skip `.`/`$`/`System Volume Information`/library folder, case-insensitive extensions, skipped-by-extension counts
+- [x] `diff`: new / changed / unchanged / disappeared (+ reappeared missing files)
+- [x] Unit tests for walk rules and diff
 
 ## 5. Metadata and thumbnails (`imagory/metadata.py`, `imagory/thumbs.py`)
 - [x] Read dimensions, format, EXIF `DateTimeOriginal`, orientation; HEIC via pillow-heif
@@ -35,9 +35,9 @@ Tick each box when the task is implemented, tested, and committed.
 - [x] Unit tests (date fallback, orientation, thumbnail path/size, corrupt file)
 
 ## 6. Scan coordinator (`imagory/scanner.py`)
-- [ ] `Scanner.run()`: walk, diff, process in `ProcessPoolExecutor` (CPU-1), apply in ~200-file transactions, mark missing, record `scan_runs`
-- [ ] Progress callback and cooperative cancel (stop queueing, commit in-flight results)
-- [ ] Integration tests for PRD §7.5 items 2–5 (rows, no-op rescan, 1 updated + 1 missing, cancel/resume, corrupt image, source unchanged)
+- [x] `Scanner.run()`: walk, diff, process in `ProcessPoolExecutor` (CPU-1), apply in ~200-file transactions, mark missing, record `scan_runs`
+- [x] Progress callback and cooperative cancel (stop queueing, commit in-flight results)
+- [x] Integration tests for PRD §7.5 items 2–5 (rows, no-op rescan, 1 updated + 1 missing, cancel/resume, corrupt image, source unchanged)
 
 ## 7. UI (`imagory/ui/`)
 - [ ] Main window: empty state with "Choose folder", toolbar (Rescan, Change folder), Help menu ("Open log folder", About with MIT licence)
