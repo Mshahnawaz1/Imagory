@@ -298,6 +298,8 @@ settings     key, value
 - Initial scan (hash and thumbnail for every file) may take tens of minutes to an hour depending on the drive. This is acceptable because it runs in the background with progress and resumes after interruption.
 - The UI stays responsive during scans. CPU-heavy work runs in worker processes, not threads, because Python threads do not run CPU work in parallel.
 - **Testing:** a script generates a fake library (100,000 small images with varied EXIF dates, a share of exact duplicates, and a synthetic Takeout layout with JSON sidecars using all naming quirks from section 8.3). Real photos are tested by the author locally and are never committed to the repository. Run the 100,000-photo test at the end of V0 (scan and plain grid) and again when the V1 grid prototype exists.
+- **Takeout fixture:** `scripts/make_fake_library.py --takeout` writes the synthetic export under `OUT/Takeout` and a ground-truth `OUT/manifest.json` (expected sidecar per image, raw EXIF, JSON and filename times, expected `date_source`, `taken_at_local`, `taken_at_utc` and location), used by the section 8.3 and 8.4 tests and to check the sidecar matching report.
+- **V1 grid prototype** (`scripts/grid_prototype.py --bench`, 100,000 in-memory items in 241 month sections, WSL offscreen): layout build 0.3 ms, reflow 0.04 ms, first paint 45 ms, full-viewport repaint about 1.5 ms (median scroll step 6 ms, worst 16 ms) with thumbnails in memory. Still to measure against the real thumbnail cache, by eye on a real display, and on Windows.
 
 ## 11. Privacy
 
@@ -387,11 +389,17 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Grid loading | The first 500 rows are queried directly (index-ordered, so the LIMIT stops early) and the rest load on a background read-only thread, to meet the 1-second first screen at 100,000 photos |
 | Grid during a scan | The scan coordinator reports the grid rows of each committed batch to the UI (a signal, no UI database access); the grid inserts them in sorted order. A 200-photo batch costs about 45 ms of UI time on a 100,000-photo grid |
 | Leaving the viewer | A visible Back button, because Esc alone was not discoverable (found testing the Windows .exe) |
+| Date logic (V1) | Pure functions in `imagory/dates.py`; "now" and the computer's time zone are injectable for tests |
+| Filename dates | Patterns match at the start of the name, case-insensitively; WhatsApp date-only names give midnight local time; invalid, pre-1990 and future filename dates fall through to the modified time |
+| Takeout JSON vs EXIF | Less than 24 h apart: EXIF wall-clock as local time plus JSON UTC, `date_source = takeout_json` (pending confirmation, section 18). 24 h or more: JSON wins, converted with the computer's zone. With JSON present, its UTC overrides EXIF `OffsetTimeOriginal` |
+| Photo date across copies | Best source rank (takeout_json, exif, filename, mtime); ties go to a known UTC time, then the earliest local time, then the earliest UTC time, so input order never matters |
+| Grid view (V1) | Custom `QAbstractScrollArea` with a Qt-free layout computed from per-month counts (bisect lookups); data source and thumbnail provider are interfaces, so the widget never touches the database; selection stored as a bytearray; vertical scrollbar always shown to avoid reflow loops |
+| Fake Takeout truncation | Sidecar stem cut to 46 characters before `.json` (51 in total), with a numbered duplicate's counter added after the cut; to validate against real exports |
 
 ## 17. Risks
 
 - **Takeout complexity:** inconsistent filenames, sidecar mismatches, and rewritten metadata may cause incorrect dates or missed duplicates. Mitigated by tolerant matching, the matching report, and date_source.
-- **Grid with month headers:** a custom virtualized view is the most complex UI part. Prototype it early with the 100,000-photo fake library; fall back to a flat grid if it blocks V1.
+- **Grid with month headers:** a custom virtualized view is the most complex UI part. Prototype it early with the 100,000-photo fake library; fall back to a flat grid if it blocks V1. The prototype meets the target with in-memory items (section 10); keep the fallback until it is confirmed with real thumbnails on Windows.
 - **Executable size and antivirus:** single-file PyInstaller builds are large and often flagged when unsigned. Mitigated later by the folder build.
 - **Scale:** scan time and grid smoothness at 100,000 photos need measurement.
 - **Database safety:** cloud-synced folders can corrupt SQLite. Mitigated by the warning and the pre-migration backup.
@@ -407,3 +415,5 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 4. **Zip handling (V1.5):** read inside zips or extract to an app-managed folder.
 5. **V2 details:** confirm faces as a downloadable extension and its position on the roadmap.
 6. **Localized Takeout folder names (V1):** collect the localized names of "Google Photos" that type detection should recognize.
+7. **Takeout JSON within 24 h of EXIF:** the date is stored with `date_source = takeout_json` so it keeps the top rank across copies; `exif` is the alternative. Confirm.
+8. **Future EXIF dates:** the 1990 and future limits apply only to filename dates. Decide whether EXIF dates in the future (wrong camera clock) should be rejected too.
