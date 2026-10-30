@@ -18,6 +18,7 @@ class ScanThread(QThread):
     progressed = Signal(object)  # Progress
     succeeded = Signal(object)  # ScanSummary
     failed = Signal(str)
+    added = Signal(list)  # list[GridPhoto] just committed
 
     def __init__(
         self, db_file: Path, source: db.Source, thumbs_root: Path, library_root: Path, parent=None
@@ -46,6 +47,7 @@ class ScanThread(QThread):
                 self._library_root,
                 progress=self._emit_progress,
                 cancel_event=self._cancel,
+                on_added=self.added.emit,
             )
             summary: ScanSummary = scanner.run()
         except Exception as exc:

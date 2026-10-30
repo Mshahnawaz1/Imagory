@@ -452,6 +452,22 @@ def grid_photos(
     return list(map(GridPhoto._make, cur))
 
 
+def grid_photos_for_files(conn: sqlite3.Connection, file_ids: list[int]) -> list[GridPhoto]:
+    """Grid rows for specific files, e.g. the ones a scan batch just added (unordered)."""
+    if not file_ids:
+        return []
+    cur = conn.cursor()
+    cur.row_factory = None
+    placeholders = ",".join("?" * len(file_ids))
+    cur.execute(
+        "SELECT p.id, f.relative_path, p.width, p.height, p.format, p.taken_at_local, "
+        "p.date_source FROM photos p JOIN files f ON f.id = p.primary_file_id "
+        f"WHERE f.id IN ({placeholders}) AND f.status = 'ok'",
+        file_ids,
+    )
+    return list(map(GridPhoto._make, cur))
+
+
 # --- settings ---------------------------------------------------------------------------
 
 

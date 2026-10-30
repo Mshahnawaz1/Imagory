@@ -207,3 +207,18 @@ def test_change_folder_deletes_rows_and_thumbnails(source_dir, lib):
     assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
     assert not any(p.is_file() for p in paths.thumbs_dir(root).rglob("*"))
     assert snapshot(source_dir) == before
+
+
+def test_on_added_reports_each_committed_photo(source_dir, lib):
+    root, conn = lib
+    source = db.create_source(conn, str(source_dir), source_dir.name)
+    batches: list[list[db.GridPhoto]] = []
+    scan(conn, source, root, commit_batch=2, worker_batch=1, on_added=batches.append)
+    assert len(batches) > 1  # reported per commit, not only at the end
+    reported = sorted(p.relative_path for batch in batches for p in batch)
+    assert reported == sorted(p.relative_path for p in db.grid_photos(conn, source.id))
+
+    # A rescan with nothing new reports nothing.
+    batches.clear()
+    scan(conn, source, root, on_added=batches.append)
+    assert batches == []

@@ -174,6 +174,7 @@ class ScanSummary:
 
 
 ProgressCallback = Callable[[Progress], None]
+AddedCallback = Callable[[list[db.GridPhoto]], None]
 
 
 def default_workers() -> int:
@@ -195,6 +196,7 @@ class Scanner:
         worker_batch: int = WORKER_BATCH,
         progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        on_added: AddedCallback | None = None,
     ) -> None:
         self.conn = conn
         self.source = source
@@ -205,6 +207,7 @@ class Scanner:
         self.worker_batch = worker_batch
         self._progress = progress or (lambda p: None)
         self._cancel = cancel_event or threading.Event()
+        self._on_added = on_added
 
     def cancel(self) -> None:
         """Stop queueing new work; in-flight results are still committed."""
@@ -284,6 +287,7 @@ class Scanner:
             if not pending:
                 return
             now = db.utc_now()
+            added_ids: list[int] = []
             with db.transaction(self.conn):
                 for res in pending:
                     if res.error:
@@ -300,7 +304,7 @@ class Scanner:
                     )
                     fid = file_ids[res.relative_path]
                     if fid is None:
-                        db.insert_file(self.conn, self.source.id, record, now)
+                        added_ids.append(db.insert_file(self.conn, self.source.id, record, now))
                     else:
                         db.update_file(self.conn, fid, record, now)
             for res in pending:
@@ -312,6 +316,9 @@ class Scanner:
                 else:
                     counts.updated += 1
             pending.clear()
+            if self._on_added is not None and added_ids:
+                # Committed, so the grid can show these while the scan carries on.
+                self._on_added(db.grid_photos_for_files(self.conn, added_ids))
 
         batches = _chunks(
             [FileJob(f.relative_path, f.size, f.modified_time) for _, f in jobs], self.worker_batch
