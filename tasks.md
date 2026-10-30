@@ -7,20 +7,20 @@ Tick each box when the task is implemented, tested, and committed.
 - [x] `pyproject.toml` (Python 3.12, PySide6, Pillow, pillow-heif; dev: pytest, ruff, pyinstaller) and committed `uv.lock`
 - [x] ruff and pytest config in `pyproject.toml`
 - [x] `.gitignore`, MIT `LICENSE`, rename `Readme.md` to `README.md`
-- [ ] `imagory/` package skeleton and `__main__.py` calling `multiprocessing.freeze_support()` first
+- [x] `imagory/` package skeleton and `__main__.py` calling `multiprocessing.freeze_support()` first
 
 ## 2. Paths and logging (`imagory/paths.py`, `imagory/logs.py`)
-- [ ] Library folder resolution: `IMAGORY_LIBRARY`, `%LOCALAPPDATA%\Imagory`, `$XDG_DATA_HOME/imagory`
-- [ ] Bundled-resource helper (`sys._MEIPASS`)
-- [ ] Rotating log file in `<library>/logs/`
-- [ ] Unit tests
+- [x] Library folder resolution: `IMAGORY_LIBRARY`, `%LOCALAPPDATA%\Imagory`, `$XDG_DATA_HOME/imagory`
+- [x] Bundled-resource helper (`sys._MEIPASS`)
+- [x] Rotating log file in `<library>/logs/`
+- [x] Unit tests
 
 ## 3. Database (`imagory/db.py`)
-- [ ] Connection setup: WAL, `foreign_keys=ON`, `synchronous=NORMAL`
-- [ ] Migration framework on `PRAGMA user_version`, each step in a transaction, `.bak` copy before migrating an existing DB
-- [ ] Migration 1: V1 core schema (`sources`, `files`, `photos`, `scan_runs`, `settings`) and indexes (PRD §9)
+- [x] Connection setup: WAL, `foreign_keys=ON`, `synchronous=NORMAL`
+- [x] Migration framework on `PRAGMA user_version`, each step in a transaction, `.bak` copy before migrating an existing DB
+- [x] Migration 1: V1 core schema (`sources`, `files`, `photos`, `scan_runs`, `settings`) and indexes (PRD §9)
 - [ ] Queries: source create/get/delete, file state for diff, apply batch (insert/update file + photo), mark missing, scan_runs, grid listing
-- [ ] Unit tests: new DB at current version, pragmas, backup, source delete
+- [x] Unit tests: new DB at current version, pragmas, backup, source delete
 
 ## 4. Walk and diff (`imagory/scanner.py`, pure functions)
 - [ ] `walk_source`: `os.scandir`, no symlinks/junctions, skip `.`/`$`/`System Volume Information`/library folder, case-insensitive extensions, skipped-by-extension counts
