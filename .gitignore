@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+# local dev library (IMAGORY_LIBRARY) and generated fake libraries
+.dev-library/
+.fake-library/
