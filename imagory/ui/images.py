@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 from PySide6.QtGui import QImage
 
-from imagory.thumbs import register_heif
+from imagory.thumbs import fit_within, register_heif
 
 
 def load_qimage(path: Path, max_size: tuple[int, int] | None = None) -> QImage:
@@ -21,7 +21,7 @@ def load_qimage(path: Path, max_size: tuple[int, int] | None = None) -> QImage:
         data = fh.read()
     with Image.open(io.BytesIO(data)) as img:
         if max_size and img.format == "JPEG":
-            img.draft("RGB", max_size)
+            img.draft("RGB", fit_within(img.size, *max_size))
         img = ImageOps.exif_transpose(img)
         img = img.convert("RGBA")
         width, height = img.size

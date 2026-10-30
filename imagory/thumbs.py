@@ -73,6 +73,17 @@ def _to_rgb(img: Image.Image) -> Image.Image:
     return img.convert("RGB")
 
 
+def fit_within(size: tuple[int, int], max_w: int, max_h: int) -> tuple[int, int]:
+    """Size after scaling ``size`` down (never up) to fit in ``max_w`` x ``max_h``.
+
+    Use it for ``Image.draft``, which only reduces while *both* sides stay at or above the
+    requested size, so asking for a square box would skip the reduction for most photos.
+    """
+    width, height = size
+    scale = min(1.0, max_w / width, max_h / height) if width and height else 1.0
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
 def make_thumbnail(img: Image.Image, dest: Path) -> None:
     """Write a 320 px JPEG thumbnail of ``img`` with EXIF orientation applied.
 
@@ -80,7 +91,7 @@ def make_thumbnail(img: Image.Image, dest: Path) -> None:
     """
     if img.format == "JPEG":
         # Decode at reduced size; several times faster for large JPEGs.
-        img.draft("RGB", (THUMB_SIZE, THUMB_SIZE))
+        img.draft("RGB", fit_within(img.size, THUMB_SIZE, THUMB_SIZE))
     img = ImageOps.exif_transpose(img)
     img.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.Resampling.LANCZOS, reducing_gap=3.0)
     img = _to_rgb(img)

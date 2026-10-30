@@ -94,3 +94,18 @@ def test_ensure_thumbnail_regenerates(tmp_path):
     assert not first.exists()
     again = thumbs.ensure_thumbnail(src, cache, "a.jpg")
     assert again == first and again.exists()
+
+
+def test_fit_within():
+    assert thumbs.fit_within((640, 480), 320, 320) == (320, 240)
+    assert thumbs.fit_within((3000, 4000), 320, 320) == (240, 320)
+    assert thumbs.fit_within((100, 50), 320, 320) == (100, 50)
+
+
+def test_large_jpeg_thumbnail_uses_draft(tmp_path):
+    src = tmp_path / "src"
+    img = make_image(src / "big.jpg", (4000, 3000))
+    result = thumbs.process_file(str(src), str(tmp_path / "thumbs"), _job(img, src))
+    assert (result.width, result.height) == (4000, 3000)  # original size, not draft size
+    with Image.open(thumbs.thumb_path(tmp_path / "thumbs", "big.jpg")) as t:
+        assert t.size == (320, 240)
