@@ -49,14 +49,14 @@ Tick each box when the task is implemented, tested, and committed.
 - [x] Offscreen smoke test
 
 ## 8. Performance (PRD §7.5 item 6, §10)
-- [ ] `scripts/make_fake_library.py`: 100,000 small images with varied EXIF dates and a share of exact duplicates
-- [ ] `scripts/bench.py`: full scan, unchanged rescan, time-to-first-screen
-- [ ] Run on 100k and record results in `docs/v0-results.md`
+- [x] `scripts/make_fake_library.py`: 100,000 small images with varied EXIF dates and a share of exact duplicates (synthetic Takeout layout deferred to V1)
+- [x] `scripts/bench.py`: full scan, unchanged rescan, time-to-first-screen
+- [x] Run on 100k and record results in `docs/v0-results.md` (scroll smoothness by eye still pending on Windows)
 
 ## 9. Packaging (PRD §7.5 item 7, §13)
-- [ ] PyInstaller `--onefile` spec (`imagory.spec`) and build instructions
+- [x] PyInstaller `--onefile` spec (`imagory.spec`), build instructions, `THIRD_PARTY_LICENSES.txt` (spec validated with a Linux build; frozen binary starts)
 - [ ] Windows 10/11 verification and .exe size: **must be done on real Windows** (cannot be verified from WSL)
 
 ## 10. Docs
-- [ ] README: offline/privacy promise, setup, run, test, build, SmartScreen note
-- [ ] PRD sync for any decisions made during implementation
+- [x] README: offline/privacy promise, setup, run, test, build, SmartScreen note
+- [x] PRD sync for any decisions made during implementation

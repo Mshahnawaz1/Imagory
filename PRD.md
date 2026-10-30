@@ -1,6 +1,6 @@
 # Imagory: Product Requirements Document
 
-Version 1.1 · October 30, 2026 · Status: V0 and V1 scope agreed, V0 detailed down to implementation level. Remaining open items are listed in section 18.
+Version 1.2 · October 31, 2026 · Status: V0 implemented (Windows checks pending, section 7.5). V1 scope agreed. Remaining open items are listed in section 18.
 
 ## 1. Overview
 
@@ -111,7 +111,7 @@ The code is split into small modules with one job each. The UI never touches fil
 - JPEG decoding uses Pillow's draft mode to decode at reduced size, which makes thumbnail generation several times faster.
 - GIFs use the first frame.
 - **Missing thumbnails are regenerated on demand** by the thumbnail loader, so the cache can be deleted at any time (principle 3).
-- V0 has no content hashes, so its thumbnails are keyed by the BLAKE2b hash of the file's relative path and use the same folder layout. Workers can then write thumbnails directly without knowing the database id. On the V1 migration, the V0 cache is simply deleted and regenerated.
+- V0 has no content hashes, so its thumbnails are keyed by the BLAKE2b hash of the file's relative path (ASCII case-folded, like `COLLATE NOCASE`, so a case-only rename keeps its thumbnail) and use the same folder layout. Workers can then write thumbnails directly without knowing the database id. On the V1 migration, the V0 cache is simply deleted and regenerated.
 
 ### 6.6 Logging and errors
 
@@ -274,7 +274,7 @@ scan_runs    id, source_id, started_at, finished_at, status,
 settings     key, value
 ```
 
-**Indexes:** `photos(taken_at_local)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`.
+**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `scan_runs(source_id)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
 
 **Design choices**
 
@@ -377,6 +377,13 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Output | Single .exe first, zipped folder build later |
 | License | MIT for all Imagory code; bundled dependencies keep their own licences, listed in THIRD_PARTY_LICENSES.txt |
 | Name | Imagory |
+| Qt package | `pyside6-essentials` (LGPL) instead of the full `pyside6` meta-package, to keep the build small |
+| V0 unreadable files | Not stored in the database; counted as errors and retried on every scan, so a repaired file is picked up |
+| V0 missing files | Marked right after the walk and diff, before processing, so a scan cancelled during processing still records them; "missing" in the summary counts newly missing files |
+| Stored dimensions | Width and height as displayed, after EXIF orientation is applied |
+| Worker processes | Started with the `spawn` method on every platform, matching Windows |
+| Grid painting | Custom item delegate paints prepared pixmaps directly; thumbnails decode in C++ (`QImageReader`) on two loader threads to limit GIL contention with the UI |
+| Grid loading | The first 500 rows are queried directly (index-ordered, so the LIMIT stops early) and the rest load on a background read-only thread, to meet the 1-second first screen at 100,000 photos |
 
 ## 17. Risks
 
@@ -392,7 +399,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 ## 18. Open questions
 
 1. **Date priority:** validate the rules in section 8.4 on a real Takeout export.
-2. **pillow-heif licences:** confirm which codecs the Windows wheels bundle and that the licences are compatible with distributing the .exe.
+2. **pillow-heif licences:** the pillow-heif 1.8 wheels bundle libheif and libde265 (LGPLv3) and **x265 (GPLv2)**, and state that the binary wheels are GPLv2 as a whole (the Windows wheels add the MinGW runtime). Distributing the .exe with them would make the bundled binary GPLv2, which conflicts with the permissive/LGPL-only dependency rule. Options: accept GPLv2 for the binary, build a decode-only libheif without x265, or drop HEIC. Decide before the first public release.
 3. **Competitor check:** test digiKam and Immich on a real Takeout export before building V1.
 4. **Zip handling (V1.5):** read inside zips or extract to an app-managed folder.
 5. **V2 details:** confirm faces as a downloadable extension and its position on the roadmap.
