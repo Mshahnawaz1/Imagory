@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from imagory import __version__, db, paths, sources, takeout
 from imagory.scanner import Progress, ScanSummary
 from imagory.ui.grid import PhotoGridModel, PhotoGridView, ThumbnailLoader
-from imagory.ui.grid_query import GridQueryThread
+from imagory.ui.grid_query import GridQuery
 from imagory.ui.scan_thread import ScanThread, SourceScanResult
 from imagory.ui.sources_dialog import TYPE_NAMES, AddSourceDialog, SourcesDialog, default_label
 from imagory.ui.viewer import PhotoViewer
@@ -116,7 +116,8 @@ class MainWindow(QMainWindow):
         self._load_sources()
         self.scan_thread: ScanThread | None = None
         self._grid_token = 0
-        self._grid_threads: set[GridQueryThread] = set()
+        self.grid_query = GridQuery(self.db_file, self)
+        self.grid_query.loaded.connect(self._on_rest_of_grid)
         self._anchor_id: int | None = None  # photo to keep in view across a grid reload
         self._scan_prefix = ""  # names the source being scanned when there are several
         self._closing = False
@@ -213,22 +214,11 @@ class MainWindow(QMainWindow):
         self.model.set_photos(photos, self.sources_by_id)
         self._restore_anchor()
         if len(photos) == FIRST_PAGE:
-            self._load_rest_of_grid(len(photos))
+            self.grid_query.start(len(photos), self._grid_token)
         if self.pages.currentIndex() != PAGE_VIEWER:
             self.pages.setCurrentIndex(PAGE_GRID)
         self._update_actions()
         self._show_photo_count()
-
-    def _load_rest_of_grid(self, offset: int) -> None:
-        thread = GridQueryThread(self.db_file, offset, self._grid_token, self)
-        thread.loaded.connect(self._on_rest_of_grid)
-        thread.finished.connect(lambda: self._grid_thread_done(thread))
-        self._grid_threads.add(thread)
-        thread.start()
-
-    def _grid_thread_done(self, thread: GridQueryThread) -> None:
-        self._grid_threads.discard(thread)
-        thread.deleteLater()
 
     def _on_rest_of_grid(self, token: int, photos: list) -> None:
         if token != self._grid_token or self._closing:
@@ -572,8 +562,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Stopping scan…")
             self.scan_thread.cancel()
             self.scan_thread.wait()  # in-flight results are committed before it exits
-        for thread in list(self._grid_threads):
-            thread.wait()
+        self.grid_query.wait()
         self.loader.reset({})
         self.loader.wait()
         super().closeEvent(event)
