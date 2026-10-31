@@ -408,6 +408,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Edited copies | Use their own sidecar if any, otherwise share the original's. `-edited` is confirmed; localized suffixes are unconfirmed guesses |
 | Takeout location | `geoData` only (ignored when both coordinates are 0); no fallback to `geoDataExif`, so a location removed in Google Photos does not return |
 | Takeout Trash | Skipped only directly under the root or a "Google Photos" folder; deeper folders named Trash are imported. Localized names unconfirmed |
+| Albums during a scan | Album actions (create, rename, delete, add, remove) are disabled while a scan runs, so the scan thread stays the only database writer |
 | Albums | Names unique, case-insensitive, trimmed. `ON DELETE CASCADE` on both album_photos keys covers album, photo, and source deletion. Album counts exclude missing photos; memberships of missing photos are kept |
 | Search text | Words split on whitespace and AND-ed, each a case-insensitive `LIKE` on the relative path (filename and folders) of any copy, with `%`, `_` and `\` escaped |
 | Filters | Source, folder and text must hold for one copy; folder matches whole path segments; date range inclusive, excluding unknown dates when set; "Missing" shows only photos with no ok file; "Has duplicates" means more than one file row. Filtered queries pin the `taken_at_local` index, because SQLite otherwise sorts every row |
@@ -441,5 +442,4 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 6. **Localized Takeout folder names (V1):** collect the localized names of "Google Photos" that type detection should recognize.
 7. **Takeout JSON within 24 h of EXIF:** the date is stored with `date_source = takeout_json` so it keeps the top rank across copies; `exif` is the alternative. Confirm.
 8. **Future EXIF dates:** the 1990 and future limits apply only to filename dates. Decide whether EXIF dates in the future (wrong camera clock) should be rejected too.
-9. **Album edits during a scan:** the scan thread is the only writer. Either allow album edits mid-scan (tiny transactions, with a `busy_timeout` on the UI connection) or disable album actions while scanning. Decide before wiring albums into the main window.
-10. **Automatic rescan after the V0 upgrade:** upgraded files have no hash until the next scan. Decide whether to start a scan automatically.
+9. **Automatic rescan after the V0 upgrade:** upgraded files have no hash until the next scan. Decide whether to start a scan automatically.

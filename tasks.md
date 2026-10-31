@@ -10,9 +10,9 @@ Wave 1 is merged (see `docs/v1-agents.md`). Remaining V1 work:
 - [ ] §8.3/§8.4 Takeout in the scan: keep JSON names from the walk, `match_directory` per folder, read sidecars, fill `FileJob.takeout_timestamp` and `sidecar_relative_path`, skip Trash, set photo latitude/longitude, edited copies use the original's date, log the matching report
 - [ ] §8.1/§8.4 Recompute dates on a source type change (from stored EXIF inputs, filename, mtime, sidecar)
 - [ ] §8.7 Filter bar in the main window: switch the grid's row/count queries and scan-row `accepts`; `db.month_counts` for an empty filter; filtered count in the status bar
-- [ ] §8.8 Albums in the main window: Albums menu, "Add to album" on toolbar and right-click menu for the selection, album view, "Remove from album"; decide on album edits during a scan (PRD §18 item 9)
+- [ ] §8.8 Albums in the main window: Albums menu, "Add to album" on toolbar and right-click menu for the selection, album view, "Remove from album"; disable album actions while a scan runs (decided)
 - [ ] §8.6 Browsing: viewer zoom/pan, info panel (date and its source, location, source, path, size, dimensions, "Also found in…"), Show in Explorer, "Open in viewer" in the right-click menu
-- [ ] Decide on an automatic scan after the V0 upgrade (PRD §18 item 10)
+- [ ] Decide on an automatic scan after the V0 upgrade (PRD §18 item 9; recommended: a one-time prompt with Scan now / Later)
 - [ ] Rerun the 100k bench on Windows and judge scrolling by eye
 
 ## Open from V0
