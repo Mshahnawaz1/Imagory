@@ -11,7 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from imagory import db, thumbs
+from imagory import dates, db, takeout, thumbs
 
 log = logging.getLogger(__name__)
 
@@ -107,3 +107,89 @@ def remove_missing(
         removed.photos,
     )
     return removed
+
+
+def _list_names(folder: Path) -> list[str] | None:
+    """File names in a folder (read-only), or None if it cannot be read."""
+    try:
+        with os.scandir(folder) as entries:
+            return [e.name for e in entries if e.is_file(follow_symlinks=False)]
+    except OSError:
+        return None
+
+
+def recompute_dates(conn: sqlite3.Connection, source: db.Source) -> int:
+    """Recompute every file date of a source from the stored inputs (PRD §8.1, §8.4): EXIF
+    time and offset, file name, modified time, and for Takeout the sidecar. Used when the
+    user changes the source type. Returns the number of files whose date changed.
+
+    For a Takeout source the sidecars are matched again from the folders on disk (read
+    only). A folder that cannot be read keeps the sidecar path stored earlier. Photos are
+    not re-read, and Trash files already imported stay. The caller commits; the database is
+    only written when everything was computed, so a failure changes nothing.
+    """
+    is_takeout = source.type == "takeout"
+    root = Path(source.root_path)
+    if is_takeout and not root.is_dir():
+        # Sidecars cannot be read, and guessing would downgrade stored Takeout dates.
+        raise FileNotFoundError(f"Source folder not found: {root}")
+    rows = db.date_inputs(conn, source.id)
+    matched: dict[str, str] = {}  # image path -> sidecar path
+    if is_takeout:
+        by_dir: dict[str, list[str]] = {}
+        for row in rows:
+            rel_dir, _, name = row.relative_path.rpartition("/")
+            by_dir.setdefault(rel_dir, []).append(name)
+        for rel_dir, images in by_dir.items():
+            folder = root.joinpath(*rel_dir.split("/")) if rel_dir else root
+            listed = _list_names(folder)
+            if listed is None:
+                continue
+            prefix = f"{rel_dir}/" if rel_dir else ""
+            result = takeout.match_folder(folder, listed)
+            for image in images:
+                sidecar = result.matches.get(image)
+                if sidecar is not None:
+                    matched[prefix + image] = prefix + sidecar
+    updates: list[db.RecomputedDate] = []
+    for row in rows:
+        sidecar_path = matched.get(row.relative_path) or (
+            row.sidecar_relative_path if is_takeout else None
+        )
+        sidecar = None
+        if sidecar_path is not None:
+            sidecar = takeout.read_sidecar(root.joinpath(*sidecar_path.split("/")))
+        result = dates.resolve_date(
+            source.type,
+            mtime_ns=row.modified_time,
+            takeout_timestamp=sidecar.taken_timestamp if sidecar else None,
+            exif_datetime=row.exif_taken_at,
+            exif_offset=row.exif_offset,
+            filename=row.relative_path.rsplit("/", 1)[-1],
+        )
+        updates.append(
+            db.RecomputedDate(
+                row.id,
+                result.taken_at_local,
+                result.taken_at_utc,
+                result.date_source,
+                sidecar_path,
+                sidecar.latitude if sidecar else None,
+                sidecar.longitude if sidecar else None,
+            )
+        )
+    with db.transaction(conn):
+        changed = db.apply_recomputed_dates(conn, source.id, updates)
+    log.info("Source %d: recomputed dates as %s, %d changed", source.id, source.type, changed)
+    return changed
+
+
+def change_source_type(conn: sqlite3.Connection, source_id: int, type: str) -> int:
+    """Set a source's type (the user's choice) and recompute its dates. Returns how many
+    files' dates changed. Run it on the thread that owns the connection, never during a
+    scan of the same library."""
+    with db.transaction(conn):
+        db.set_source_type(conn, source_id, type)
+    source = db.get_source(conn, source_id)
+    assert source is not None
+    return recompute_dates(conn, source)

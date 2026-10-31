@@ -600,6 +600,92 @@ def update_file(conn: sqlite3.Connection, file_id: int, rec: FileRecord, now: st
     refresh_photos(conn, [pid for pid in dict.fromkeys((photo_id, old_photo)) if pid is not None])
 
 
+def set_photo_location(
+    conn: sqlite3.Connection, file_id: int, latitude: float | None, longitude: float | None
+) -> None:
+    """Store a Takeout location on the photo of a file. No location never clears one."""
+    if latitude is None or longitude is None:
+        return
+    conn.execute(
+        "UPDATE photos SET latitude = ?, longitude = ? "
+        "WHERE id = (SELECT photo_id FROM files WHERE id = ?)",
+        (latitude, longitude, file_id),
+    )
+
+
+class DateInputs(NamedTuple):
+    """What a file's date is computed from (PRD §8.4), as stored."""
+
+    id: int
+    relative_path: str
+    modified_time: int
+    exif_taken_at: str | None
+    exif_offset: str | None
+    sidecar_relative_path: str | None
+
+
+class RecomputedDate(NamedTuple):
+    file_id: int
+    taken_at_local: str
+    taken_at_utc: str | None
+    date_source: str
+    sidecar_relative_path: str | None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+def date_inputs(conn: sqlite3.Connection, source_id: int) -> list[DateInputs]:
+    """Every file row of a source (missing ones too) with its stored date inputs."""
+    return [
+        DateInputs(*r)
+        for r in conn.execute(
+            "SELECT id, relative_path, modified_time, exif_taken_at, exif_offset, "
+            "sidecar_relative_path FROM files WHERE source_id = ? ORDER BY relative_path, id",
+            (source_id,),
+        )
+    ]
+
+
+def apply_recomputed_dates(
+    conn: sqlite3.Connection, source_id: int, updates: Iterable[RecomputedDate]
+) -> int:
+    """Store recomputed file dates and refresh the dates of their photos. Returns the
+    number of files whose date, date source or sidecar changed."""
+    changed = 0
+    photo_ids: set[int] = set()
+    for u in updates:
+        row = conn.execute(
+            "SELECT photo_id, taken_at_local, taken_at_utc, date_source, sidecar_relative_path "
+            "FROM files WHERE id = ? AND source_id = ?",
+            (u.file_id, source_id),
+        ).fetchone()
+        if row is None:
+            continue
+        if tuple(row[1:]) != (
+            u.taken_at_local,
+            u.taken_at_utc,
+            u.date_source,
+            u.sidecar_relative_path,
+        ):
+            changed += 1
+            conn.execute(
+                "UPDATE files SET taken_at_local = ?, taken_at_utc = ?, date_source = ?, "
+                "sidecar_relative_path = ? WHERE id = ?",
+                (
+                    u.taken_at_local,
+                    u.taken_at_utc,
+                    u.date_source,
+                    u.sidecar_relative_path,
+                    u.file_id,
+                ),
+            )
+        if row[0] is not None:
+            photo_ids.add(row[0])
+            set_photo_location(conn, u.file_id, u.latitude, u.longitude)
+    refresh_photos(conn, photo_ids)
+    return changed
+
+
 def visible_photo_ids(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[int]:
     """Photos with these hashes that the grid shows now (their primary copy is ok)."""
     hashes = list(set(hashes))
