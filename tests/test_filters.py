@@ -252,11 +252,13 @@ def test_perf(conn, capsys):
             files.append((n + i, s2, i, f"Takeout/{folder}/IMG_{i:06d}.jpg", "ok"))
     with db.transaction(conn):
         conn.executemany(
-            "INSERT INTO photos (id, content_hash, primary_file_id, taken_at_local) VALUES (?,?,?,?)",
+            "INSERT INTO photos (id, content_hash, primary_file_id, taken_at_local) "
+            "VALUES (?,?,?,?)",
             photos,
         )
         conn.executemany(
-            "INSERT INTO files (id, source_id, photo_id, relative_path, size, modified_time, status, "
+            "INSERT INTO files (id, source_id, photo_id, relative_path, size, modified_time, "
+            "status, "
             "first_seen_at, last_seen_at) VALUES (?,?,?,?,1,1,?,'z','z')",
             files,
         )
@@ -290,3 +292,110 @@ def test_perf(conn, capsys):
     t0 = time.perf_counter()
     db.folder_paths(conn, s1)
     assert time.perf_counter() - t0 < 2
+
+
+# --- filter bar widget ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def bar(qtbot):
+    from imagory.ui.filter_bar import FilterBar
+
+    widget = FilterBar(
+        sources=lambda: [(1, "Phone"), (2, "Takeout")],
+        folders=lambda sid: ["2020", "2020/Trip"] if sid == 1 else ["Google Photos"],
+    )
+    qtbot.addWidget(widget)
+    widget.show()
+    return widget
+
+
+def collect(bar):
+    seen: list[PhotoFilter] = []
+    bar.filterChanged.connect(seen.append)
+    return seen
+
+
+def test_bar_starts_empty(bar):
+    assert bar.filter() == PhotoFilter()
+
+
+def test_bar_text_is_debounced(bar, qtbot):
+    seen = collect(bar)
+    for text in ("b", "be", " beach "):
+        bar._text.setText(text)
+    assert seen == []
+    qtbot.waitUntil(lambda: len(seen) == 1, timeout=2000)
+    assert seen == [PhotoFilter(text="beach")]
+
+
+def test_bar_toggles_emit_at_once_and_flush_text(bar):
+    seen = collect(bar)
+    bar._text.setText("abc")
+    bar._duplicates.setChecked(True)
+    assert seen == [PhotoFilter(text="abc", has_duplicates=True)]
+    bar._missing.setChecked(True)
+    assert seen[-1] == PhotoFilter(text="abc", has_duplicates=True, missing=True)
+    assert len(seen) == 2
+
+
+def test_bar_dates(bar):
+    from PySide6.QtCore import QDate
+
+    seen = collect(bar)
+    bar._date_from.setDate(QDate(2020, 1, 31))
+    bar._date_to.setDate(QDate(2020, 2, 29))
+    assert seen[-1] == PhotoFilter(date_from="2020-01-31", date_to="2020-02-29")
+    bar._date_from.setDate(bar._date_from.minimumDate())  # clearing a date
+    assert seen[-1] == PhotoFilter(date_to="2020-02-29")
+
+
+def test_bar_sources_and_folders(bar):
+    seen = collect(bar)
+    assert not bar._folder.isEnabled()  # several sources, none picked
+    bar._source_menu.actions()[0].setChecked(True)
+    assert seen[-1] == PhotoFilter(source_ids=frozenset({1}))
+    assert bar._folder.isEnabled()
+    assert [bar._folder.itemData(i) for i in range(bar._folder.count())] == [
+        "",
+        "2020",
+        "2020/Trip",
+    ]
+    bar._folder.setCurrentIndex(2)
+    assert seen[-1] == PhotoFilter(source_ids=frozenset({1}), folder=(1, "2020/Trip"))
+    bar._source_menu.actions()[1].setChecked(True)  # two sources: folder scope is gone
+    assert seen[-1] == PhotoFilter(source_ids=frozenset({1, 2}))
+    assert not bar._folder.isEnabled()
+
+
+def test_bar_set_filter_roundtrip_and_clear(bar):
+    seen = collect(bar)
+    f = PhotoFilter(
+        text="x y",
+        date_from="2019-05-06",
+        source_ids=frozenset({1}),
+        folder=(1, "2020/Trip"),
+        has_duplicates=True,
+        missing=True,
+    )
+    bar.set_filter(f)
+    assert bar.filter() == f
+    assert seen == [f]
+    bar.set_filter(f)  # unchanged: no second signal
+    assert seen == [f]
+    bar._clear.click()
+    assert bar.filter() == PhotoFilter() and seen[-1] == PhotoFilter()
+    assert not bar._clear.isEnabled()
+
+
+def test_bar_folder_pins_source(bar):
+    bar.set_filter(PhotoFilter(folder=(2, "Google Photos")))
+    assert bar.filter() == PhotoFilter(source_ids=frozenset({2}), folder=(2, "Google Photos"))
+
+
+def test_bar_refresh_keeps_checked_sources(bar):
+    bar._source_menu.actions()[1].setChecked(True)
+    bar.set_providers(sources=lambda: [(2, "Takeout"), (3, "New")])
+    assert bar.filter().source_ids == frozenset({2})
+    bar.set_providers(sources=lambda: [(3, "New")])
+    assert bar.filter() == PhotoFilter()
