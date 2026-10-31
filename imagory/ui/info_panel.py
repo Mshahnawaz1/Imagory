@@ -57,7 +57,7 @@ def is_wsl() -> bool:
 
 
 def reveal_argv(
-    path: Path, platform: str = sys.platform, wsl_path: str | None = None
+    path: Path, platform: str | None = None, wsl_path: str | None = None
 ) -> list[str] | str | None:
     """The command that shows ``path`` selected in the platform's file manager, or None
     when there is no way to select a file (the caller then just opens the folder).
@@ -69,6 +69,7 @@ def reveal_argv(
     switch and opens a default folder. Only the path may be quoted (Windows paths cannot
     contain ``"``).
     """
+    platform = platform or sys.platform  # read at call time so tests can patch it
     if platform == "win32":
         return f'explorer /select,"{os.path.normpath(path)}"'
     if platform == "darwin":
