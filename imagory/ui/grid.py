@@ -84,7 +84,7 @@ class _LoaderSignals(QObject):
 
 
 class _LoadTask(QRunnable):
-    def __init__(self, signals, generation, photo_id, source_root, thumbs_root, rel, size):
+    def __init__(self, signals, generation, photo_id, source_root, thumbs_root, rel, size, hash_):
         super().__init__()
         self.signals = signals
         self.generation = generation
@@ -93,10 +93,13 @@ class _LoadTask(QRunnable):
         self.thumbs_root = thumbs_root
         self.rel = rel
         self.size = size
+        self.content_hash = hash_
 
     def run(self) -> None:
         # Regenerates the thumbnail from the source file if the cache entry was deleted.
-        path = thumbs.ensure_thumbnail(self.source_root, self.thumbs_root, self.rel)
+        path = thumbs.ensure_thumbnail(
+            self.source_root, self.thumbs_root, self.rel, self.content_hash
+        )
         image = load_thumbnail(path, self.size) if path else QImage()
         # The loader may have been destroyed while this task ran (shutdown).
         with contextlib.suppress(RuntimeError):
@@ -129,7 +132,7 @@ class ThumbnailLoader(QObject):
         self.thumbs_root = thumbs_root
         self.device_pixel_ratio = device_pixel_ratio
         self.pixel_size = round(ICON_SIZE * device_pixel_ratio)
-        # Per source id: its folder and its thumbnail folder.
+        # Per source id: its folder and the (shared, hash-keyed) thumbnail folder.
         self._folders: dict[int, tuple[Path, Path]] = {}
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(2)  # more threads only add GIL contention with the UI
@@ -147,10 +150,7 @@ class ThumbnailLoader(QObject):
         self._cache.clear()
         self._failed.clear()
         self._pending.clear()
-        self._folders = {
-            sid: (Path(s.root_path), thumbs.source_thumbs_dir(self.thumbs_root, sid))
-            for sid, s in sources.items()
-        }
+        self._folders = {sid: (Path(s.root_path), self.thumbs_root) for sid, s in sources.items()}
 
     def drop_queued(self) -> None:
         """Discard queued (not yet started) loads, e.g. when the visible area scrolls away."""
@@ -176,6 +176,7 @@ class ThumbnailLoader(QObject):
                     folders[1],
                     photo.relative_path,
                     self.pixel_size,
+                    photo.content_hash,
                 )
             )
         return None

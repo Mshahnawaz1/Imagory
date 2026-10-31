@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -133,6 +134,7 @@ class SourcesDialog(QDialog):
         self.rename_button = QPushButton("Rename…", self)
         self.type_button = QPushButton("Change type…", self)
         self.relocate_button = QPushButton("Relocate…", self)
+        self.remove_missing_button = QPushButton("Remove missing…", self)
         self.remove_button = QPushButton("Remove…", self)
         close_button = QPushButton("Close", self)
         self.add_button.clicked.connect(window.add_source_interactive)
@@ -140,6 +142,7 @@ class SourcesDialog(QDialog):
         self.rename_button.clicked.connect(self._rename)
         self.type_button.clicked.connect(self._change_type)
         self.relocate_button.clicked.connect(self._relocate)
+        self.remove_missing_button.clicked.connect(self._remove_missing)
         self.remove_button.clicked.connect(self._remove)
         close_button.clicked.connect(self.accept)
 
@@ -150,6 +153,7 @@ class SourcesDialog(QDialog):
             self.rename_button,
             self.type_button,
             self.relocate_button,
+            self.remove_missing_button,
             self.remove_button,
         ):
             buttons.addWidget(button)
@@ -159,6 +163,7 @@ class SourcesDialog(QDialog):
         layout.addWidget(self.table, 1)
         layout.addLayout(buttons)
         self.resize(900, 360)
+        self._stats: dict[int, db.SourceStats] = {}
 
         window.sources_changed.connect(self.refresh)
         window.scan_state_changed.connect(self._update_buttons)
@@ -166,7 +171,7 @@ class SourcesDialog(QDialog):
 
     def refresh(self) -> None:
         selected = self.selected_source()
-        stats = self.window_.source_stats()
+        stats = self._stats = self.window_.source_stats()
         sources = self.window_.sources
         self.table.setRowCount(len(sources))
         for row, source in enumerate(sources):
@@ -212,6 +217,11 @@ class SourcesDialog(QDialog):
             self.remove_button,
         ):
             button.setEnabled(has and idle)
+        self.remove_missing_button.setEnabled(has and idle and self._selected_missing() > 0)
+
+    def _selected_missing(self) -> int:
+        source = self.selected_source()
+        return self._stats.get(source.id, db.SourceStats()).missing if source else 0
 
     def _rescan(self) -> None:
         if (source := self.selected_source()) is not None:
@@ -232,3 +242,22 @@ class SourcesDialog(QDialog):
     def _remove(self) -> None:
         if (source := self.selected_source()) is not None:
             self.window_.remove_source_interactive(source)
+
+    def _remove_missing(self) -> None:
+        """Ask first: forgetting missing items is never automatic (PRD §8.2)."""
+        source = self.selected_source()
+        if source is None or self.window_.scanning:
+            return
+        count = self._selected_missing()
+        answer = QMessageBox.question(
+            self,
+            "Remove missing items",
+            f"Forget the {count:,} missing files of “{source.label}”?\n\n"
+            "These files were not found at the last scan, for example because they were "
+            "deleted or their drive is unplugged. Photos with no other copy disappear from "
+            "Imagory. Files on disk are not touched.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.window_.remove_missing_items(source.id)

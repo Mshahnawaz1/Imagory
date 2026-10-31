@@ -5,6 +5,7 @@ Runs inside worker processes, so it must not import Qt or touch the database.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from PIL import Image
@@ -12,6 +13,7 @@ from PIL import Image
 EXIF_IFD = 0x8769
 TAG_ORIENTATION = 0x0112
 TAG_DATETIME_ORIGINAL = 0x9003
+TAG_OFFSET_TIME_ORIGINAL = 0x9011
 
 # Orientations 5-8 rotate by 90 degrees, so width and height swap when displayed.
 _SWAPS_AXES = {5, 6, 7, 8}
@@ -38,27 +40,37 @@ def mtime_to_local(mtime_ns: int) -> str:
     return datetime.fromtimestamp(mtime_ns / 1_000_000_000).isoformat(timespec="seconds")
 
 
-def best_date(exif_date: str | None, mtime_ns: int) -> tuple[str, str]:
-    """V0 date fallback: EXIF ``DateTimeOriginal``, else the file's modified time."""
-    if exif_date:
-        return exif_date, "exif"
-    return mtime_to_local(mtime_ns), "mtime"
+@dataclass(frozen=True)
+class ExifInfo:
+    taken: str | None  # DateTimeOriginal as ISO 8601 without offset
+    offset: str | None  # raw OffsetTimeOriginal text such as "+02:00"
+    orientation: int  # 1-8
 
 
-def read_exif(img: Image.Image) -> tuple[str | None, int]:
-    """Return (DateTimeOriginal as ISO text or None, orientation 1-8)."""
+def read_exif(img: Image.Image) -> ExifInfo:
+    """Read DateTimeOriginal, OffsetTimeOriginal and orientation; never raises."""
     try:
         exif = img.getexif()
     except Exception:
-        return None, 1
+        return ExifInfo(None, None, 1)
     orientation = exif.get(TAG_ORIENTATION, 1)
     if not isinstance(orientation, int) or not 1 <= orientation <= 8:
         orientation = 1
     try:
-        taken = parse_exif_datetime(exif.get_ifd(EXIF_IFD).get(TAG_DATETIME_ORIGINAL))
+        ifd = exif.get_ifd(EXIF_IFD)
+        taken = parse_exif_datetime(ifd.get(TAG_DATETIME_ORIGINAL))
+        offset = _text(ifd.get(TAG_OFFSET_TIME_ORIGINAL))
     except Exception:
-        taken = None
-    return taken, orientation
+        taken, offset = None, None
+    return ExifInfo(taken, offset if taken else None, orientation)
+
+
+def _text(value: object) -> str | None:
+    if isinstance(value, bytes):
+        value = value.decode("ascii", "ignore")
+    if not isinstance(value, str):
+        return None
+    return value.strip().rstrip("\x00").strip() or None
 
 
 def displayed_size(size: tuple[int, int], orientation: int) -> tuple[int, int]:

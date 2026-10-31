@@ -120,7 +120,7 @@ D's queries if trivial). Full tests and ruff after each merge; then PRD, README,
 
 | Agent | Status |
 | --- | --- |
-| A | started |
+| A | merged |
 | B | merged |
 | C | started |
 | D | started |

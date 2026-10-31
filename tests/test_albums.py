@@ -35,18 +35,32 @@ def src(conn):
     return db.create_source(conn, "/photos", "Photos")
 
 
-def test_migration_v1_to_v2_keeps_data(tmp_path):
+def test_migration_from_v1_keeps_data(tmp_path):
     path = tmp_path / "imagory.db"
     conn = db.connect(path)
     with db.transaction(conn):
         db._migration_1(conn)
         conn.execute("PRAGMA user_version = 1")
-    source = db.create_source(conn, "/photos", "Photos")
-    pid = add_photo(conn, source.id, "a.jpg")
+    # Version-1 rows written with plain SQL: today's insert functions expect later columns.
+    with db.transaction(conn):
+        source_id = conn.execute(
+            "INSERT INTO sources (label, root_path, added_at) VALUES ('Photos', '/photos', ?)",
+            (NOW,),
+        ).lastrowid
+        pid = conn.execute(
+            "INSERT INTO photos (taken_at_local, date_source) "
+            "VALUES ('2020-01-01T00:00:00', 'exif')"
+        ).lastrowid
+        fid = conn.execute(
+            "INSERT INTO files (source_id, photo_id, relative_path, size, modified_time, "
+            "first_seen_at, last_seen_at) VALUES (?, ?, 'a.jpg', 10, 1000, ?, ?)",
+            (source_id, pid, NOW, NOW),
+        ).lastrowid
+        conn.execute("UPDATE photos SET primary_file_id = ? WHERE id = ?", (fid, pid))
     conn.close()
 
     conn = db.open_database(path)
-    assert db.schema_version(conn) == 2
+    assert db.schema_version(conn) == db.SCHEMA_VERSION
     assert (tmp_path / "imagory.db.bak").exists()
     backup = sqlite3.connect(tmp_path / "imagory.db.bak")
     assert backup.execute("PRAGMA user_version").fetchone()[0] == 1

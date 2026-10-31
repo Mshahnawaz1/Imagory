@@ -77,16 +77,33 @@ def add_source(
     type: str,
     detected_type: str,
 ) -> db.Source:
+    # Thumbnails are keyed by content hash, not source, so a reused id inherits nothing.
     source = db.create_source(conn, str(folder), label, type, type_overridden=type != detected_type)
-    # SQLite can reuse the id of the last removed source; never inherit its thumbnails.
-    thumbs.remove_source_thumbs(thumbs_root, source.id)
     log.info("Source %d added: %s (%s, %s)", source.id, folder, label, type)
     return source
 
 
 def remove_source(conn: sqlite3.Connection, thumbs_root: Path, source_id: int) -> None:
-    """Forget a source: its thumbnails first (they regenerate if this stops halfway), then
-    its rows. Only called after the user confirms. Files on disk are never touched."""
-    thumbs.remove_source_thumbs(thumbs_root, source_id)
+    """Forget a source: the thumbnails of photos no other source has first (they
+    regenerate if this stops halfway), then its rows. Only called after the user
+    confirms. Files on disk are never touched."""
+    thumbs.remove_thumbnails(thumbs_root, db.source_orphan_hashes(conn, source_id))
     db.delete_source(conn, source_id)
     log.info("Source %d removed", source_id)
+
+
+def remove_missing(
+    conn: sqlite3.Connection, thumbs_root: Path, source_id: int
+) -> db.RemovedMissing:
+    """The "Remove missing items" action (PRD §8.2): forget a source's missing files, and the photos
+    left with no files with their thumbnails. Only called after the user confirms; never
+    automatic. Files on disk are never touched."""
+    thumbs.remove_thumbnails(thumbs_root, db.missing_orphan_hashes(conn, source_id))
+    removed = db.delete_missing_files(conn, source_id)
+    log.info(
+        "Source %d: removed %d missing files and %d photos",
+        source_id,
+        removed.files,
+        removed.photos,
+    )
+    return removed
