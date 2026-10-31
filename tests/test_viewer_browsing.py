@@ -89,7 +89,8 @@ def test_describe_shows_every_field(conn):
     text = info_panel.describe(db.photo_info(conn, photo_id))
     assert "2020-05-01 10:00:00 (from Takeout JSON)" in text
     assert "33.50000\u00b0 S, 151.25000\u00b0 E" in text
-    assert "Phone" in text and "2020/x.jpg" in text
+    # the full path uses the OS separator (backslashes on Windows)
+    assert "Phone" in text and os.path.join("2020", "x.jpg") in text
     assert "1.2 KB" in text
     assert "64 \u00d7 48 (JPEG)" in text
     assert "Also found in" in text and "Backup: copy/x.jpg" in text
