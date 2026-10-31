@@ -144,7 +144,7 @@ def test_show_in_explorer_falls_back_to_the_folder(tmp_path, monkeypatch):
     make_image(photo)
     before = snapshot(tmp_path)
     assert info_panel.show_in_explorer(photo)
-    assert opened == [str(tmp_path)]
+    assert [Path(p) for p in opened] == [tmp_path]  # toLocalFile() uses "/" on Windows too
     assert not info_panel.show_in_explorer(tmp_path / "nope" / "b.jpg")
     assert snapshot(tmp_path) == before
 
