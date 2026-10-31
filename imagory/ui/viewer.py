@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from imagory.db import GridPhoto
+from imagory.db import GridPhoto, Source
 from imagory.ui.grid import display_name, format_date
 from imagory.ui.images import load_qimage
 
@@ -116,7 +116,7 @@ class PhotoViewer(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.canvas, 1)
         self._photos: list[GridPhoto] = []
-        self._source_root: Path | None = None
+        self._sources: dict[int, Source] = {}
         self._row = -1
         self._token = 0
         self._pool = QThreadPool(self)
@@ -152,9 +152,9 @@ class PhotoViewer(QWidget):
             self._row += count
         self._update_status(self._photos[self._row])
 
-    def show_photo(self, photos: list[GridPhoto], source_root: Path, row: int) -> None:
+    def show_photo(self, photos: list[GridPhoto], sources: dict[int, Source], row: int) -> None:
         self._photos = photos
-        self._source_root = source_root
+        self._sources = sources
         self._go(row)
         self.setFocus()
 
@@ -166,8 +166,11 @@ class PhotoViewer(QWidget):
         self._update_status(photo)
         self._token += 1
         self._pool.clear()
-        assert self._source_root is not None
-        path = self._source_root.joinpath(*photo.relative_path.split("/"))
+        source = self._sources.get(photo.source_id)
+        if source is None:
+            self.canvas.set_image(QImage(), "This photo's source was removed.")
+            return
+        path = Path(source.root_path).joinpath(*photo.relative_path.split("/"))
         screen = (
             self.screen().size() * self.devicePixelRatioF() if self.screen() else QSize(4096, 4096)
         )
@@ -178,9 +181,12 @@ class PhotoViewer(QWidget):
 
     def _update_status(self, photo: GridPhoto) -> None:
         dims = f"{photo.width} × {photo.height}" if photo.width else "unknown size"
+        source = self._sources.get(photo.source_id)
+        label = source.label if source else "removed source"
         self.status.setText(
             f"{display_name(photo)}  ·  {dims}  ·  {format_date(photo.taken_at_local)} "
-            f"({photo.date_source or 'unknown'})  ·  {self._row + 1} of {len(self._photos)}"
+            f"({photo.date_source or 'unknown'})  ·  {label}  ·  "
+            f"{self._row + 1} of {len(self._photos)}"
         )
         self.status.setToolTip(photo.relative_path)
 

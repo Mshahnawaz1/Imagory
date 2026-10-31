@@ -17,10 +17,9 @@ class GridQueryThread(QThread):
 
     loaded = Signal(int, list)  # token, list[GridPhoto]
 
-    def __init__(self, db_file: Path, source_id: int, offset: int, token: int, parent=None):
+    def __init__(self, db_file: Path, offset: int, token: int, parent=None):
         super().__init__(parent)
         self._db_file = db_file
-        self._source_id = source_id
         self._offset = offset
         self._token = token
 
@@ -28,7 +27,7 @@ class GridQueryThread(QThread):
         try:
             conn = db.connect(self._db_file)
             try:
-                photos = db.grid_photos(conn, self._source_id, offset=self._offset)
+                photos = db.grid_photos(conn, offset=self._offset)
             finally:
                 conn.close()
         except Exception:
