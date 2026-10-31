@@ -8,8 +8,7 @@ from pathlib import Path
 import pytest
 
 from imagory import db, paths
-from imagory.db import FileState
-from imagory.scanner import Scanner, WalkedFile, diff_files
+from imagory.scanner import Scanner
 from tests.imaging import make_image
 from tests.test_scan import snapshot
 
@@ -169,19 +168,3 @@ def test_changed_contents_at_a_new_path_is_not_a_move(photos, lib):
     make_image(photos / "other.jpg", color=(9, 9, 9))
     c = scan(conn, source, root)
     assert (c.moved, c.added, c.missing) == (0, 1, 1)
-
-
-def test_diff_treats_unhashed_rows_as_changed():
-    existing = [
-        FileState(1, "v0.jpg", 10, 100, "ok", needs_hash=True),
-        FileState(2, "v1.jpg", 10, 100, "ok"),
-        FileState(3, "v0-back.jpg", 10, 100, "missing", needs_hash=True),
-    ]
-    walked = [
-        WalkedFile("v0.jpg", 10, 100),
-        WalkedFile("v1.jpg", 10, 100),
-        WalkedFile("v0-back.jpg", 10, 100),
-    ]
-    d = diff_files(walked, existing)
-    assert sorted(fid for fid, _ in d.changed) == [1, 3]
-    assert d.unchanged == 1 and d.reappeared == [] and d.disappeared == []

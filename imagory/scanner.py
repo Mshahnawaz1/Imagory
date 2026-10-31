@@ -126,10 +126,7 @@ class Diff:
 
 
 def diff_files(walked: list[WalkedFile], existing: list[db.FileState]) -> Diff:
-    """Compare a walk with the stored file rows. Paths match case-insensitively (NOCASE).
-
-    A row without a content hash (from V0) counts as changed, so it is hashed once.
-    """
+    """Compare a walk with the stored file rows. Paths match case-insensitively (NOCASE)."""
     by_path = {fold_path(f.relative_path): f for f in existing}
     seen: set[int] = set()
     new_paths: set[str] = set()
@@ -146,7 +143,7 @@ def diff_files(walked: list[WalkedFile], existing: list[db.FileState]) -> Diff:
             result.new.append(item)
             continue
         seen.add(row.id)
-        if row.needs_hash or row.size != item.size or row.modified_time != item.modified_time:
+        if row.size != item.size or row.modified_time != item.modified_time:
             result.changed.append((row.id, item))
             continue
         result.unchanged += 1

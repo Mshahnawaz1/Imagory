@@ -1,5 +1,5 @@
 """Exact duplicates, photo identity by hash, primary copy, missing photos, remove missing,
-date wiring, and the V0 to V1 upgrade (PRD §8.2, §8.4, §8.5, §9)."""
+and date wiring (PRD §8.2, §8.4, §8.5)."""
 
 import os
 import shutil
@@ -332,86 +332,6 @@ def test_dates_from_exif_offset_filename_and_across_copies(tmp_path, lib):
     (src / "IMG_20190131_235959.jpg").unlink()
     scan(conn, source, root)
     assert photo_of(conn, source.id, "plain-name.jpg")["date_source"] == "filename"
-
-
-def _make_v0_library(db_file: Path, src: Path) -> None:
-    """A schema-1 (V0) database: one photo per file, no hashes, as V0 wrote it."""
-    conn = db.connect(db_file)
-    with db.transaction(conn):
-        db._migration_1(conn)
-        conn.execute("PRAGMA user_version = 1")
-    conn.execute(
-        "INSERT INTO sources (id, label, root_path, added_at) VALUES (1, 'photos', ?, ?)",
-        (str(src), "2026-01-01T00:00:00Z"),
-    )
-    for i, name in enumerate(sorted(p.name for p in src.iterdir()), 1):
-        st = (src / name).stat()
-        conn.execute(
-            "INSERT INTO photos (id, width, height, format, taken_at_local, date_source) "
-            "VALUES (?, 64, 48, 'JPEG', '2001-01-01T00:00:00', 'mtime')",
-            (i,),
-        )
-        conn.execute(
-            "INSERT INTO files (id, source_id, photo_id, relative_path, size, modified_time, "
-            "taken_at_local, date_source, first_seen_at, last_seen_at) "
-            "VALUES (?, 1, ?, ?, ?, ?, '2001-01-01T00:00:00', 'mtime', ?, ?)",
-            (i, i, name, st.st_size, st.st_mtime_ns, f"2026-01-0{i}T00:00:00Z", "2026-01-09Z"),
-        )
-        conn.execute("UPDATE photos SET primary_file_id = ? WHERE id = ?", (i, i))
-    conn.close()
-
-
-def test_v0_library_upgrades_then_rescan_merges_duplicates(tmp_path, library):
-    src = tmp_path / "photos"
-    a = make_image(src / "a.jpg", taken="2019:01:31 23:59:59")
-    copy(a, src / "b.jpg")
-    make_image(src / "c.jpg", color=(0, 0, 9))
-    root = paths.ensure_library_dir()
-    db_file = paths.db_path(root)
-    _make_v0_library(db_file, src)
-
-    conn = db.open_database(db_file)
-    assert db.schema_version(conn) == db.SCHEMA_VERSION == 3
-    assert Path(str(db_file) + ".bak").exists()
-    # Schema only: the V0 rows are untouched and still browsable.
-    assert count(conn, "photos") == 3
-    assert len(db.grid_photos(conn)) == 3
-    assert all(p.content_hash is None for p in db.grid_photos(conn))
-    assert all(s.needs_hash for s in db.load_file_states(conn, 1))
-
-    source = db.get_source(conn, 1)
-    c = scan(conn, source, root)
-    assert (c.updated, c.added, c.unchanged, c.errors) == (3, 0, 0, 0)
-    assert count(conn, "files") == 3  # file rows keep their ids
-    assert {r[0] for r in conn.execute("SELECT id FROM files")} == {1, 2, 3}
-    assert count(conn, "photos") == 2
-    merged = photo_of(conn, 1, "a.jpg")
-    assert merged["id"] == photo_of(conn, 1, "b.jpg")["id"]
-    assert merged["content_hash"] and merged["date_source"] == "exif"
-    assert primary_of(conn, merged["id"]) == (1, "a.jpg")  # first seen
-    assert not any(s.needs_hash for s in db.load_file_states(conn, 1))
-    assert all(p.content_hash for p in db.grid_photos(conn))
-
-    # Hashed now: the next scan processes nothing.
-    c = scan(conn, source, root)
-    assert (c.updated, c.unchanged) == (0, 3)
-    conn.close()
-
-
-def test_v0_unhashed_missing_rows_are_not_reprocessed(tmp_path, library):
-    src = tmp_path / "photos"
-    make_image(src / "a.jpg")
-    make_image(src / "b.jpg", color=(5, 5, 5))
-    root = paths.ensure_library_dir()
-    _make_v0_library(paths.db_path(root), src)
-    (src / "b.jpg").unlink()
-    conn = db.open_database(paths.db_path(root))
-    c = scan(conn, db.get_source(conn, 1), root)
-    assert (c.updated, c.missing) == (1, 1)
-    # The missing V0 file keeps its V0 photo (it still has a file row).
-    assert count(conn, "photos") == 2
-    assert len(db.grid_photos(conn)) == 1
-    conn.close()
 
 
 def test_remove_missing_from_sources_dialog_asks_first(qtbot, tmp_path, monkeypatch):

@@ -68,7 +68,7 @@ def _execute_script(conn: sqlite3.Connection, script: str) -> None:
 
 
 def _migration_1(conn: sqlite3.Connection) -> None:
-    """V1 core schema, used by V0 with one source and empty hash columns."""
+    """Core schema: sources, photos, files, scan runs, settings."""
     _execute_script(
         conn,
         """
@@ -170,10 +170,8 @@ def _migration_2(conn: sqlite3.Connection) -> None:
 def _migration_3(conn: sqlite3.Connection) -> None:
     """V1 duplicates, moves, and dates (PRD §8.2, §8.4, §8.5). Schema only.
 
-    V0 files keep an empty ``content_hash``, so the next scan treats them as changed,
-    hashes them, and reattaches them to photos by hash (merging duplicates). V0 photos
-    left with no files are deleted then. The EXIF columns keep the raw date inputs, so
-    dates can be recomputed (e.g. on a source type change) without rescanning.
+    The EXIF columns keep the raw date inputs, so dates can be recomputed (e.g. on a
+    source type change) without rescanning.
     """
     _execute_script(
         conn,
@@ -188,6 +186,8 @@ def _migration_3(conn: sqlite3.Connection) -> None:
 
 MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3]
 SCHEMA_VERSION = len(MIGRATIONS)
+# V0 and development databases (versions 1 and 2) were never released and are replaced.
+FIRST_SUPPORTED_VERSION = 3
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
@@ -224,8 +224,18 @@ def migrate(conn: sqlite3.Connection, db_file: Path | None = None) -> int:
 
 
 def open_database(db_file: Path) -> sqlite3.Connection:
-    """Connect to the library database, creating or migrating it as needed."""
+    """Connect to the library database, creating or migrating it as needed.
+
+    A database older than :data:`FIRST_SUPPORTED_VERSION` (V0 and development builds, which
+    were never released) is replaced by a fresh one instead of being migrated.
+    """
     conn = connect(db_file)
+    if 0 < schema_version(conn) < FIRST_SUPPORTED_VERSION:
+        log.warning("Replacing the pre-release database %s with a new one", db_file)
+        conn.close()
+        for suffix in ("", "-wal", "-shm"):
+            Path(str(db_file) + suffix).unlink(missing_ok=True)
+        conn = connect(db_file)
     migrate(conn, db_file)
     return conn
 
@@ -413,15 +423,13 @@ class FileState:
     size: int
     modified_time: int
     status: str
-    needs_hash: bool = False  # no content hash yet (a V0 row): reprocess it
 
 
 def load_file_states(conn: sqlite3.Connection, source_id: int) -> list[FileState]:
     return [
-        FileState(r[0], r[1], r[2], r[3], r[4], bool(r[5]))
-        for r in conn.execute(
-            "SELECT id, relative_path, size, modified_time, status, content_hash IS NULL "
-            "FROM files WHERE source_id = ?",
+        FileState(*row)
+        for row in conn.execute(
+            "SELECT id, relative_path, size, modified_time, status FROM files WHERE source_id = ?",
             (source_id,),
         )
     ]
@@ -461,7 +469,7 @@ def touch_seen(conn: sqlite3.Connection, source_id: int, seen_at: str) -> None:
 class FileRecord:
     """A processed file ready to store. Mirrors the worker's result.
 
-    ``content_hash`` None (tests and V0-style callers only) always creates a new photo.
+    ``content_hash`` None (tests only) always creates a new photo.
     """
 
     relative_path: str
@@ -529,7 +537,7 @@ def insert_file(conn: sqlite3.Connection, source_id: int, rec: FileRecord, now: 
 
 
 def update_file(conn: sqlite3.Connection, file_id: int, rec: FileRecord, now: str) -> None:
-    """Store reprocessed results for a changed, reappeared, rehashed (V0), or moved file.
+    """Store reprocessed results for a changed, reappeared, or moved file.
 
     The file keeps its id and ``first_seen_at``. If its hash changed it moves to the
     photo with the new hash. When it was its photo's only file and no photo has the new
@@ -676,7 +684,7 @@ class GridPhoto(NamedTuple):
     format: str | None
     taken_at_local: str | None
     date_source: str | None
-    content_hash: str | None = None  # thumbnail key; None until a V0 row is rescanned
+    content_hash: str | None = None  # thumbnail key; None for a row stored without one
 
 
 def grid_photos(

@@ -120,7 +120,7 @@ def test_ensure_thumbnail_regenerates(tmp_path):
     assert not first.exists()
     again = thumbs.ensure_thumbnail(src, cache, "a.jpg", key)
     assert again == first and again.exists()
-    # A V0 row without a hash yet: the file is hashed to find its thumbnail.
+    # A row stored without a hash: the file is hashed to find its thumbnail.
     thumbs.clear_thumbs(cache)
     assert thumbs.ensure_thumbnail(src, cache, "a.jpg", None) == first and first.exists()
 

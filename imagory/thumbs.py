@@ -225,7 +225,7 @@ def ensure_thumbnail(
     """Find a photo's cached thumbnail from what a ``GridPhoto`` carries, regenerating it
     from the source file if it is missing.
 
-    ``content_hash`` None is a V0 row not rescanned yet: the file is read and hashed to
+    ``content_hash`` None (a row stored without a hash): the file is read and hashed to
     find (or write) its thumbnail. The source file is only ever opened for reading.
     """
     if content_hash is not None:

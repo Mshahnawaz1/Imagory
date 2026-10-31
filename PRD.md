@@ -111,7 +111,7 @@ The code is split into small modules with one job each. The UI never touches fil
 - JPEG decoding uses Pillow's draft mode to decode at reduced size, which makes thumbnail generation several times faster.
 - GIFs use the first frame.
 - **Missing thumbnails are regenerated on demand** by the thumbnail loader, so the cache can be deleted at any time (principle 3).
-- V0 has no content hashes, so its thumbnails are keyed by the BLAKE2b hash of the file's relative path (ASCII case-folded, like `COLLATE NOCASE`, so a case-only rename keeps its thumbnail) and use the same folder layout. Workers can then write thumbnails directly without knowing the database id. On the V1 migration, the V0 cache is simply deleted and regenerated.
+- V0 keyed thumbnails by a hash of the relative path. V1 keys them by content hash. The cache is cleared once when its layout version changes, and it rebuilds on demand.
 
 ### 6.6 Logging and errors
 
@@ -286,7 +286,7 @@ settings     key, value
 - `modified_time` is stored as integer nanoseconds (`st_mtime_ns`), so the scan diff compares exact values.
 - `taken_at_local` is stored as ISO 8601 text with no offset (`2019-01-31T23:59:59`). `taken_at_utc` and the other timestamps (`added_at`, `first_seen_at`, and so on) are stored as UTC ISO 8601 text ending in `Z`. Both sort correctly as text.
 - `photos.primary_file_id` is nullable and is set after the file row is inserted, which breaks the circular reference with `files.photo_id`.
-- **V0 to V1 migration:** the migration changes only the schema. Files with an empty `content_hash` count as changed on the next scan. Once they are hashed, they are reattached to photos by hash, which merges duplicates, and V0 photos left with no files are deleted. V0 has no albums, so nothing else depends on V0 photo ids.
+- **V0 databases are replaced, not migrated.** V0 was only a test build, so a database older than schema version 3 (V0 and development builds) is deleted and recreated empty when Imagory starts, and the user adds their folders again. From version 3 on, every change is a numbered migration with a backup.
 - Connection settings: `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`.
 - Schema version lives in `PRAGMA user_version`. Migrations are numbered functions that run in order inside a transaction, and the database file is copied to `imagory.db.bak` before migrating.
 - Face data (V2) will be added by migration: a `faces` table with photo_id, bounding box, embedding BLOB, model name, and model version, plus a `people` table.
@@ -403,7 +403,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Move detection | A new file matches any missing row of the same source with the same hash, oldest first, not only rows that went missing in this scan, because a cancelled scan keeps no state. Moves never cross sources |
 | Changed hash | A sole file edited in place re-keys its photo (keeping its id and albums); otherwise the file moves to the photo with the new hash, and a photo left with no files is deleted, its album memberships moving with the file |
 | Thumbnail cleanup | Removing a source or missing items deletes only thumbnails of photos being deleted; shared thumbnails stay |
-| V0 upgrade | Migration 3 is schema only; unhashed rows count as changed on the next scan, are hashed in place (keeping file ids) and merge by hash. Unhashed rows that are still missing are left alone |
+| V0 databases | Replaced by a fresh database (schema version below 3), not migrated; V0 held no useful scans. No backup is kept for them. From version 3 on, migrations and the pre-migration backup apply as before |
 | Takeout sidecar matching | Case-insensitive; image name plus an optional prefix of `.supplemental-metadata`, then an optional `(n)`; a numbered image `X(n).ext` takes `X.ext(n).json` first; the counter must match; long names match by prefix of at least 30 characters. Ties: title match, exact before truncated, original before edited, then name; greedy, so the result does not depend on order |
 | Edited copies | Use their own sidecar if any, otherwise share the original's. `-edited` is confirmed; localized suffixes are unconfirmed guesses |
 | Takeout location | `geoData` only (ignored when both coordinates are 0); no fallback to `geoDataExif`, so a location removed in Google Photos does not return |
@@ -442,4 +442,3 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 6. **Localized Takeout folder names (V1):** collect the localized names of "Google Photos" that type detection should recognize.
 7. **Takeout JSON within 24 h of EXIF:** the date is stored with `date_source = takeout_json` so it keeps the top rank across copies; `exif` is the alternative. Confirm.
 8. **Future EXIF dates:** the 1990 and future limits apply only to filename dates. Decide whether EXIF dates in the future (wrong camera clock) should be rejected too.
-9. **Automatic rescan after the V0 upgrade:** upgraded files have no hash until the next scan. Decide whether to start a scan automatically.
