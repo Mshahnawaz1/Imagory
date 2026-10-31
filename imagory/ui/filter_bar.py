@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from PySide6.QtCore import QDate, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +28,8 @@ from imagory.db import PhotoFilter
 SOURCE_LABEL = "Sources"
 ALL_FOLDERS = "All folders"
 NO_DATE = QDate(1900, 1, 1)  # the minimum date stands for "not set" and shows "Any"
+# The calendar of an unset date opens on this day. A fixed day for now; it was 1900-01-01.
+CALENDAR_START = QDate(2026, 11, 1)
 
 SourceOptions = Iterable[tuple[int, str]]  # (source id, label)
 
@@ -70,6 +72,7 @@ class FilterBar(QWidget):
         self._source_menu = QMenu(self)
         self._source_button = QToolButton()
         self._source_button.setText(SOURCE_LABEL)
+        self._source_button.setObjectName("filter-source")
         self._source_button.setToolTip("Only photos found in the checked sources")
         self._source_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._source_button.setMenu(self._source_menu)
@@ -88,26 +91,33 @@ class FilterBar(QWidget):
         self._missing.setToolTip("Show only photos whose files are all missing")
         self._missing.toggled.connect(self._on_changed)
 
-        self._clear = QPushButton("Clear filters")
+        self._clear = QPushButton("Clear all")
+        self._clear.setFlat(True)
         self._clear.clicked.connect(self.clear)
 
         top = QHBoxLayout()
+        top.setContentsMargins(10, 8, 10, 8)
+        top.setSpacing(8)
         top.addWidget(self._text, 1)
         top.addWidget(self._source_button)
         top.addWidget(self._folder)
+        top.addWidget(QLabel("Date"))
+        top.addWidget(self._date_from)
+        top.addWidget(QLabel("to"))
+        top.addWidget(self._date_to)
         top.addWidget(self._duplicates)
         top.addWidget(self._missing)
-        top.addWidget(self._clear)
-        bottom = QHBoxLayout()
-        bottom.addWidget(QLabel("Date:"))
-        bottom.addWidget(self._date_from)
-        bottom.addWidget(QLabel("to"))
-        bottom.addWidget(self._date_to)
-        bottom.addStretch(1)
+        self._chips = QWidget()
+        self._chip_row = QHBoxLayout(self._chips)
+        self._chip_row.setContentsMargins(10, 0, 10, 8)
+        self._chip_row.setSpacing(6)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addLayout(top)
-        layout.addLayout(bottom)
+        layout.addWidget(self._chips)
+        self.setObjectName("filter-bar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self.refresh_options()
         self._update_widgets()
@@ -193,12 +203,14 @@ class FilterBar(QWidget):
     def _make_date_edit(self, tooltip: str) -> QDateEdit:
         edit = QDateEdit()
         edit.setCalendarPopup(True)
+        edit.setFixedWidth(116)
         edit.setDisplayFormat("yyyy-MM-dd")
         edit.setMinimumDate(NO_DATE)
         edit.setSpecialValueText("Any")
         edit.setDate(NO_DATE)
         edit.setToolTip(f"{tooltip} (inclusive). Choose the earliest date to clear it.")
         edit.dateChanged.connect(self._on_changed)
+        edit.calendarWidget().installEventFilter(_CalendarStart(edit))
         return edit
 
     @staticmethod
@@ -246,6 +258,56 @@ class FilterBar(QWidget):
 
     def _update_widgets(self) -> None:
         self._clear.setEnabled(self._text.text() != "" or not self.filter().is_empty)
+        self._rebuild_chips()
+
+    def _rebuild_chips(self) -> None:
+        """One removable chip per active filter, so the active state is visible at a glance."""
+        while self._chip_row.count():
+            widget = self._chip_row.takeAt(0).widget()
+            if widget is not None and widget is not self._clear:
+                widget.setParent(None)
+                widget.deleteLater()
+        for text, remove in self._active_chips():
+            chip = QPushButton(f"{text}  ✕")
+            chip.setObjectName("chip")
+            chip.setToolTip("Remove this filter")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.clicked.connect(remove)
+            self._chip_row.addWidget(chip)
+        self._chip_row.addStretch(1)
+        self._chip_row.addWidget(self._clear)
+        self._chips.setVisible(self._chip_row.count() > 2)
+
+    def _active_chips(self) -> list[tuple[str, Callable[[], None]]]:
+        chips: list[tuple[str, Callable[[], None]]] = []
+        text = self._text.text().strip()
+        if text:
+            chips.append((f"“{text}”", self._text.clear))
+        start, end = self._date_value(self._date_from), self._date_value(self._date_to)
+        if start or end:
+            chips.append((f"{start or 'Any'} – {end or 'Any'}", self._clear_dates))
+        checked = [a.text() for a in self._source_menu.actions() if a.isChecked()]
+        if checked:
+            chips.append((", ".join(checked), self._uncheck_sources))
+        if self._folder_data():
+            chips.append((self._folder_data(), lambda: self._folder.setCurrentIndex(0)))
+        if self._duplicates.isChecked():
+            chips.append(("Has duplicates", lambda: self._duplicates.setChecked(False)))
+        if self._missing.isChecked():
+            chips.append(("Missing", lambda: self._missing.setChecked(False)))
+        return chips
+
+    def _clear_dates(self) -> None:
+        with QSignalBlocker(self._date_from), QSignalBlocker(self._date_to):
+            self._date_from.setDate(NO_DATE)
+            self._date_to.setDate(NO_DATE)
+        self._on_changed()
+
+    def _uncheck_sources(self) -> None:
+        for action in self._source_menu.actions():
+            with QSignalBlocker(action):
+                action.setChecked(False)
+        self._on_sources_changed()
 
     def _on_sources_changed(self, _checked: bool = False) -> None:
         self._update_source_text()
@@ -263,3 +325,22 @@ class FilterBar(QWidget):
         if current != self._last:
             self._last = current
             self.filterChanged.emit(current)
+
+
+class _CalendarStart(QObject):
+    """Opens the calendar of an unset date edit on ``CALENDAR_START`` instead of 1900.
+
+    Only the shown month and the highlighted day change; the edit keeps showing "Any" until
+    the user picks a day (the calendar's signals are blocked while it is positioned).
+    """
+
+    def __init__(self, edit: QDateEdit) -> None:
+        super().__init__(edit)
+        self._edit = edit
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Show and self._edit.date() == NO_DATE:
+            with QSignalBlocker(watched):
+                watched.setSelectedDate(CALENDAR_START)
+                watched.setCurrentPage(CALENDAR_START.year(), CALENDAR_START.month())
+        return False

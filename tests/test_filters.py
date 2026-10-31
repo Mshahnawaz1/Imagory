@@ -448,3 +448,28 @@ def test_real_scan_with_duplicates_and_missing(tmp_path):
     assert [r.relative_path for r in gone] == ["gone.jpg"]
     assert db.filtered_count(c, PhotoFilter(folder=(sb.id, "copy"))) == 1
     c.close()
+
+
+def test_calendar_of_unset_date_opens_on_start_day(bar, qtbot):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    from imagory.ui.filter_bar import CALENDAR_START, NO_DATE
+
+    cal = bar._date_from.calendarWidget()
+    QApplication.sendEvent(cal, QEvent(QEvent.Type.Show))
+    assert (cal.yearShown(), cal.monthShown()) == (CALENDAR_START.year(), CALENDAR_START.month())
+    assert bar._date_from.date() == NO_DATE  # still "Any"
+    assert bar.filter().date_from is None
+
+
+def test_chips_show_and_remove_active_filters(bar, qtbot):
+    from PySide6.QtWidgets import QPushButton
+
+    assert bar._chips.isHidden()
+    bar._missing.setChecked(True)
+    assert not bar._chips.isHidden()
+    chips = [b for b in bar._chips.findChildren(QPushButton) if b.objectName() == "chip"]
+    assert [c.text() for c in chips] == ["Missing  ✕"]
+    chips[0].click()
+    assert not bar._missing.isChecked() and bar._chips.isHidden()
