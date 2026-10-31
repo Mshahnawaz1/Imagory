@@ -40,6 +40,48 @@ def all_rows(conn: sqlite3.Connection, limit: int | None, offset: int) -> list[G
     return db.grid_photos(conn, limit=limit, offset=offset)
 
 
+def photo_matches(f: db.PhotoFilter, photo: GridPhoto) -> bool:
+    """Whether a photo a scan just added belongs in the view of ``f``.
+
+    Mirrors the text, date, source and folder filters of ``db.filtered_grid_photos`` on the
+    row itself. Filters that need the database (duplicates, missing, album) reject the row;
+    the reload after the scan settles it.
+    """
+    if f.missing or f.has_duplicates or f.album_id is not None:
+        return False
+    if f.source_ids and photo.source_id not in f.source_ids:
+        return False
+    if f.folder is not None:
+        source_id, prefix = f.folder
+        prefix = prefix.replace("\\", "/").strip("/")
+        if photo.source_id != source_id:
+            return False
+        if prefix and not photo.relative_path.lower().startswith(prefix.lower() + "/"):
+            return False
+    path = photo.relative_path.lower()
+    if any(word.lower() not in path for word in f.text.split()):
+        return False
+    if f.date_from or f.date_to:
+        day = photo.taken_at_local[:10] if photo.taken_at_local else None
+        if day is None or (f.date_from and day < f.date_from) or (f.date_to and day > f.date_to):
+            return False
+    return True
+
+
+def view_queries(
+    f: db.PhotoFilter,
+) -> tuple[RowsQuery, CountsQuery, Callable[[GridPhoto], bool] | None]:
+    """The rows query, month counts query and scan-row ``accepts`` for the filter ``f``.
+    The empty filter uses the plain, faster queries."""
+    if f.is_empty:
+        return all_rows, db.month_counts, None
+    return (
+        lambda conn, limit, offset: db.filtered_grid_photos(conn, f, limit, offset),
+        lambda conn: db.filtered_month_counts(conn, f),
+        lambda photo: photo_matches(f, photo),
+    )
+
+
 def display_name(photo: GridPhoto) -> str:
     return photo.relative_path.rsplit("/", 1)[-1]
 
