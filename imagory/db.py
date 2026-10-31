@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
@@ -539,6 +539,155 @@ def grid_photos_for_files(conn: sqlite3.Connection, file_ids: list[int]) -> list
         file_ids,
     )
     return list(map(GridPhoto._make, cur))
+
+
+# --- search and filters -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PhotoFilter:
+    """What the grid shows. ``PhotoFilter()`` means no filter: the rows of ``grid_photos``.
+
+    All fields combine with AND. The file-level fields (``text``, ``source_ids``,
+    ``folder``) must all be satisfied by the *same* copy of a photo.
+    """
+
+    text: str = ""  # whitespace-separated words, all must be in the file's relative path
+    date_from: str | None = None  # inclusive local date, "YYYY-MM-DD"
+    date_to: str | None = None  # inclusive local date, "YYYY-MM-DD"
+    source_ids: frozenset[int] = frozenset()  # empty = all sources
+    folder: tuple[int, str] | None = None  # (source id, folder prefix with "/" separators)
+    has_duplicates: bool = False  # more than one file row
+    missing: bool = False  # show only photos whose files are all missing
+    # Extension point (wave 2): ``album_id: int | None = None`` plus one clause in
+    # ``_filter_sql``: "p.id IN (SELECT photo_id FROM album_photos WHERE album_id = ?)".
+
+    @property
+    def is_empty(self) -> bool:
+        return self == PhotoFilter()
+
+
+def _like_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _next_day(day: str) -> str:
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+
+
+# The row file of a photo: its primary copy, or any copy if the primary is unset.
+_ROW_FILE = (
+    "f.id = COALESCE(p.primary_file_id, (SELECT MIN(m.id) FROM files m WHERE m.photo_id = p.id))"
+)
+
+
+def _filter_sql(f: PhotoFilter, ordered: bool = False) -> tuple[str, list]:
+    """The ``FROM ... WHERE ...`` part shared by the filtered queries, and its parameters.
+
+    CROSS JOIN makes SQLite walk photos in ``taken_at_local`` order, so a LIMIT can stop early.
+    A photo is missing when no copy is ``ok``; it is shown by default unless missing, and
+    ``missing=True`` flips that. File-level filters are one uncorrelated IN subquery over
+    ``files``, so that a single copy has to satisfy them all (and be ``ok``, unless showing
+    missing photos).
+    """
+    where: list[str] = []
+    params: list = []
+
+    file_conds: list[str] = []
+    file_params: list = []
+    if f.source_ids:
+        ids = sorted(f.source_ids)
+        file_conds.append(f"c.source_id IN ({','.join('?' * len(ids))})")
+        file_params.extend(ids)
+    if f.folder is not None:
+        source_id, prefix = f.folder
+        prefix = prefix.replace("\\", "/").strip("/")
+        file_conds.append("c.source_id = ?")
+        file_params.append(source_id)
+        if prefix:
+            file_conds.append("c.relative_path LIKE ? ESCAPE '\\'")
+            file_params.append(_like_escape(prefix) + "/%")
+    for word in f.text.split():
+        file_conds.append("c.relative_path LIKE ? ESCAPE '\\'")
+        file_params.append(f"%{_like_escape(word)}%")
+    if file_conds:
+        if not f.missing:
+            file_conds.append("c.status = 'ok'")
+        where.append(f"p.id IN (SELECT c.photo_id FROM files c WHERE {' AND '.join(file_conds)})")
+        params.extend(file_params)
+
+    if f.missing:
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM files k WHERE k.photo_id = p.id AND k.status = 'ok')"
+        )
+    elif not file_conds:
+        where.append("EXISTS (SELECT 1 FROM files k WHERE k.photo_id = p.id AND k.status = 'ok')")
+
+    if f.date_from:
+        where.append("p.taken_at_local >= ?")
+        params.append(date.fromisoformat(f.date_from).isoformat())
+    if f.date_to:
+        where.append("p.taken_at_local < ?")
+        params.append(_next_day(f.date_to))
+    if f.has_duplicates:
+        where.append("EXISTS (SELECT 1 FROM files d WHERE d.photo_id = p.id AND d.id <> f.id)")
+
+    # With EXISTS in the WHERE clause the planner stops using the date index and sorts
+    # everything; ``ordered`` pins it so a LIMIT stops early (counts do better without it).
+    index = " INDEXED BY idx_photos_taken_at_local" if ordered else ""
+    sql = f"FROM photos p{index} CROSS JOIN files f ON {_ROW_FILE}"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return sql, params
+
+
+def filtered_grid_photos(
+    conn: sqlite3.Connection, f: PhotoFilter, limit: int | None = None, offset: int = 0
+) -> list[GridPhoto]:
+    """Like ``grid_photos`` (same columns and order), restricted by ``f``."""
+    sql, params = _filter_sql(f, ordered=True)
+    cur = conn.cursor()
+    cur.row_factory = None
+    cur.execute(
+        "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
+        f"p.taken_at_local, p.date_source {sql} "
+        "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT ? OFFSET ?",
+        [*params, -1 if limit is None else limit, offset],
+    )
+    return list(map(GridPhoto._make, cur))
+
+
+def filtered_month_counts(conn: sqlite3.Connection, f: PhotoFilter) -> list[tuple[str | None, int]]:
+    """``("YYYY-MM", n)`` newest first, then ``(None, n)`` for unknown dates if any."""
+    sql, params = _filter_sql(f)
+    rows = conn.execute(
+        f"SELECT substr(p.taken_at_local, 1, 7) AS m, COUNT(*) {sql} GROUP BY m", params
+    ).fetchall()
+    dated = sorted(((m, n) for m, n in rows if m is not None), reverse=True)
+    unknown = sum(n for m, n in rows if m is None)
+    return [*dated, (None, unknown)] if unknown else dated
+
+
+def filtered_count(conn: sqlite3.Connection, f: PhotoFilter) -> int:
+    sql, params = _filter_sql(f)
+    return conn.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
+
+
+def folder_paths(conn: sqlite3.Connection, source_id: int) -> list[str]:
+    """Every folder of a source that holds files, plus their ancestors, without a trailing
+    slash and sorted case-insensitively. The source root itself ("") is not listed."""
+    # rtrim(path, path-without-slashes) strips the file name, leaving "a/b/".
+    rows = conn.execute(
+        "SELECT DISTINCT rtrim(relative_path, replace(relative_path, '/', '')) "
+        "FROM files WHERE source_id = ?",
+        (source_id,),
+    )
+    folders: set[str] = set()
+    for (directory,) in rows:
+        parts = directory.rstrip("/").split("/") if directory else []
+        for i in range(1, len(parts) + 1):
+            folders.add("/".join(parts[:i]))
+    return sorted(folders, key=str.casefold)
 
 
 # --- settings ---------------------------------------------------------------------------

@@ -1,0 +1,292 @@
+"""Search and filter queries (PRD 8.7) and the filter bar widget."""
+
+from __future__ import annotations
+
+import os
+import random
+import time
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from imagory import db  # noqa: E402
+from imagory.db import PhotoFilter  # noqa: E402
+
+
+@pytest.fixture
+def conn(tmp_path):
+    c = db.open_database(tmp_path / "imagory.db")
+    yield c
+    c.close()
+
+
+def add_source(conn, label="S") -> int:
+    return conn.execute(
+        "INSERT INTO sources (label, root_path, added_at) VALUES (?, ?, '2020-01-01T00:00:00Z')",
+        (label, f"/x/{label}"),
+    ).lastrowid
+
+
+def add_photo(conn, copies, taken=None) -> int:
+    """copies: list of (source_id, relative_path, status); the first 'ok' one is primary."""
+    n = conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+    pid = conn.execute(
+        "INSERT INTO photos (content_hash, width, height, format, taken_at_local, date_source) "
+        "VALUES (?, 4, 3, 'JPEG', ?, 'exif')",
+        (f"h{n}", taken),
+    ).lastrowid
+    primary = None
+    for source_id, path, status in copies:
+        fid = conn.execute(
+            "INSERT INTO files (source_id, photo_id, relative_path, size, modified_time, status, "
+            "first_seen_at, last_seen_at) VALUES (?, ?, ?, 1, 1, ?, 'z', 'z')",
+            (source_id, pid, path, status),
+        ).lastrowid
+        if primary is None or (status == "ok" and primary[1] != "ok"):
+            primary = (fid, status)
+    conn.execute("UPDATE photos SET primary_file_id = ? WHERE id = ?", (primary[0], pid))
+    return pid
+
+
+@pytest.fixture
+def lib(conn):
+    s1, s2 = add_source(conn, "A"), add_source(conn, "B")
+    ids = {
+        "beach": add_photo(conn, [(s1, "Trips/Beach/IMG_1.jpg", "ok")], "2020-07-01T10:00:00"),
+        "dup": add_photo(
+            conn,
+            [(s1, "Trips/Beach/IMG_2.jpg", "ok"), (s2, "Takeout/IMG_2.jpg", "ok")],
+            "2020-07-31T23:59:59",
+        ),
+        "alone_missing": add_photo(conn, [(s1, "Old/gone.jpg", "missing")], "2019-01-01T00:00:00"),
+        "partly_missing": add_photo(
+            conn,
+            [(s1, "Old/half.jpg", "missing"), (s2, "Keep/half.jpg", "ok")],
+            "2021-03-05T08:00:00",
+        ),
+        "all_missing_dup": add_photo(
+            conn,
+            [(s1, "Old/x.jpg", "missing"), (s2, "Old/x2.jpg", "missing")],
+            "2018-05-05T00:00:00",
+        ),
+        "undated": add_photo(conn, [(s2, "50%_off/we_ird.jpg", "ok")], None),
+        "upper": add_photo(conn, [(s2, "trips/BEACH/Sunset.PNG", "ok")], "2022-12-25T18:00:00"),
+    }
+    conn.commit()
+    return {"s1": s1, "s2": s2, **ids}
+
+
+def paths(conn, f):
+    return [r.relative_path for r in db.filtered_grid_photos(conn, f)]
+
+
+def pids(conn, f):
+    return {r.photo_id for r in db.filtered_grid_photos(conn, f)}
+
+
+def test_empty_filter_equals_grid_photos(conn, lib):
+    assert db.filtered_grid_photos(conn, PhotoFilter()) == db.grid_photos(conn)
+    assert db.filtered_grid_photos(conn, PhotoFilter(), 2, 1) == db.grid_photos(conn, 2, 1)
+    assert PhotoFilter().is_empty and not PhotoFilter(text="a").is_empty
+
+
+def test_missing_hidden_by_default_and_only_with_flag(conn, lib):
+    shown = pids(conn, PhotoFilter())
+    assert lib["alone_missing"] not in shown and lib["all_missing_dup"] not in shown
+    assert lib["partly_missing"] in shown  # one copy is still ok
+    assert pids(conn, PhotoFilter(missing=True)) == {lib["alone_missing"], lib["all_missing_dup"]}
+    assert db.filtered_count(conn, PhotoFilter(missing=True)) == 2
+
+
+def test_missing_photo_with_unset_primary_still_listed(conn, lib):
+    conn.execute("UPDATE photos SET primary_file_id = NULL WHERE id = ?", (lib["all_missing_dup"],))
+    rows = db.filtered_grid_photos(conn, PhotoFilter(missing=True))
+    assert {r.photo_id for r in rows} == {lib["alone_missing"], lib["all_missing_dup"]}
+    assert all(r.relative_path for r in rows)
+
+
+def test_text_matches_name_and_folder_case_insensitively_words_anded(conn, lib):
+    assert set(paths(conn, PhotoFilter(text="beach"))) == {
+        "Trips/Beach/IMG_1.jpg",
+        "Trips/Beach/IMG_2.jpg",
+        "trips/BEACH/Sunset.PNG",
+    }
+    assert paths(conn, PhotoFilter(text="  sunset   BEACH ")) == ["trips/BEACH/Sunset.PNG"]
+    assert paths(conn, PhotoFilter(text="img_2")) == ["Trips/Beach/IMG_2.jpg"]
+    assert paths(conn, PhotoFilter(text="nothing-like-this")) == []
+
+
+def test_text_escapes_like_wildcards(conn, lib):
+    assert paths(conn, PhotoFilter(text="%")) == ["50%_off/we_ird.jpg"]
+    assert len(paths(conn, PhotoFilter(text="_"))) == 3  # IMG_1, IMG_2, we_ird
+    assert paths(conn, PhotoFilter(text="e_i")) == ["50%_off/we_ird.jpg"]
+    assert paths(conn, PhotoFilter(text="w_ird")) == []  # "_" is not a wildcard
+    assert paths(conn, PhotoFilter(text="we_ird")) == ["50%_off/we_ird.jpg"]
+    assert paths(conn, PhotoFilter(text="\\")) == []
+
+
+def test_text_matches_any_copy_but_row_shows_primary(conn, lib):
+    rows = db.filtered_grid_photos(conn, PhotoFilter(text="takeout"))
+    assert [(r.photo_id, r.relative_path) for r in rows] == [(lib["dup"], "Trips/Beach/IMG_2.jpg")]
+
+
+def test_date_range_inclusive_and_excludes_unknown(conn, lib):
+    f = PhotoFilter(date_from="2020-07-01", date_to="2020-07-31")
+    assert pids(conn, f) == {lib["beach"], lib["dup"]}  # 23:59:59 on the last day counts
+    assert pids(conn, PhotoFilter(date_from="2022-01-01")) == {lib["upper"]}
+    assert pids(conn, PhotoFilter(date_to="2020-07-01")) == {lib["beach"]}
+    assert lib["undated"] not in pids(conn, PhotoFilter(date_from="1900-01-01"))
+    assert lib["undated"] not in pids(conn, PhotoFilter(date_to="2999-01-01"))
+    assert lib["undated"] in pids(conn, PhotoFilter())
+
+
+def test_source_filter(conn, lib):
+    only_b = pids(conn, PhotoFilter(source_ids=frozenset({lib["s2"]})))
+    assert only_b == {lib["dup"], lib["partly_missing"], lib["undated"], lib["upper"]}
+    both = pids(conn, PhotoFilter(source_ids=frozenset({lib["s1"], lib["s2"]})))
+    assert both == pids(conn, PhotoFilter())
+    # a missing-only copy in the source does not make a visible photo match
+    assert lib["partly_missing"] not in pids(conn, PhotoFilter(source_ids=frozenset({lib["s1"]})))
+    # ... but the Missing filter looks at all copies
+    f = PhotoFilter(source_ids=frozenset({lib["s2"]}), missing=True)
+    assert pids(conn, f) == {lib["all_missing_dup"]}
+
+
+def test_folder_filter_prefix_subfolders_nocase(conn, lib):
+    s1, s2 = lib["s1"], lib["s2"]
+    assert pids(conn, PhotoFilter(folder=(s1, "Trips"))) == {lib["beach"], lib["dup"]}
+    assert pids(conn, PhotoFilter(folder=(s1, "trips/beach/"))) == {lib["beach"], lib["dup"]}
+    assert pids(conn, PhotoFilter(folder=(s2, "TRIPS"))) == {lib["upper"]}
+    assert pids(conn, PhotoFilter(folder=(s1, "Trip"))) == set()  # whole path segments only
+    assert pids(conn, PhotoFilter(folder=(s2, "50%_off"))) == {lib["undated"]}
+    assert pids(conn, PhotoFilter(folder=(s2, "5%_off"))) == set()
+    assert pids(conn, PhotoFilter(folder=(s1, ""))) == pids(
+        conn, PhotoFilter(source_ids=frozenset({s1}))
+    )
+
+
+def test_has_duplicates(conn, lib):
+    f = PhotoFilter(has_duplicates=True)
+    assert pids(conn, f) == {lib["dup"], lib["partly_missing"]}
+    assert pids(conn, PhotoFilter(has_duplicates=True, missing=True)) == {lib["all_missing_dup"]}
+
+
+def test_filters_combine_with_and(conn, lib):
+    f = PhotoFilter(text="beach", date_from="2020-01-01", date_to="2020-12-31", has_duplicates=True)
+    assert pids(conn, f) == {lib["dup"]}
+    f = PhotoFilter(text="img", source_ids=frozenset({lib["s2"]}))
+    assert pids(conn, f) == {lib["dup"]}
+    # the same copy must satisfy source and text together
+    f = PhotoFilter(text="beach", source_ids=frozenset({lib["s2"]}))
+    assert pids(conn, f) == {lib["upper"]}
+
+
+def test_month_counts_match_rows(conn, lib):
+    filters = [
+        PhotoFilter(),
+        PhotoFilter(missing=True),
+        PhotoFilter(text="beach"),
+        PhotoFilter(date_from="2020-01-01"),
+        PhotoFilter(has_duplicates=True),
+        PhotoFilter(source_ids=frozenset({lib["s2"]})),
+    ]
+    for f in filters:
+        rows = db.filtered_grid_photos(conn, f)
+        counts = db.filtered_month_counts(conn, f)
+        assert sum(n for _, n in counts) == len(rows) == db.filtered_count(conn, f)
+        expected: dict = {}
+        for r in rows:
+            m = r.taken_at_local[:7] if r.taken_at_local else None
+            expected[m] = expected.get(m, 0) + 1
+        assert dict(counts) == expected
+        months = [m for m, _ in counts if m is not None]
+        assert months == sorted(months, reverse=True)
+        assert all(m is not None for m, _ in counts[:-1])
+    full = db.filtered_month_counts(conn, PhotoFilter())
+    assert full[0] == ("2022-12", 1) and full[-1] == (None, 1)
+
+
+def test_folder_paths(conn, lib):
+    assert db.folder_paths(conn, lib["s1"]) == ["Old", "Trips", "Trips/Beach"]
+    assert db.folder_paths(conn, lib["s2"]) == [
+        "50%_off",
+        "Keep",
+        "Old",
+        "Takeout",
+        "trips",
+        "trips/BEACH",
+    ]
+
+
+def test_bad_dates_raise(conn):
+    with pytest.raises(ValueError):
+        db.filtered_count(conn, PhotoFilter(date_from="nope"))
+
+
+def test_no_sort_step_without_text(conn, lib):
+    """Without text the walk is in taken_at_local order, so a LIMIT can stop early."""
+    for f in (PhotoFilter(), PhotoFilter(date_from="2000-01-01"), PhotoFilter(has_duplicates=True)):
+        sql, params = db._filter_sql(f, ordered=True)
+        order = "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT 200"
+        query = f"EXPLAIN QUERY PLAN SELECT p.id {sql} {order}"
+        plan = " ".join(r[3] for r in conn.execute(query, params))
+        assert "INDEX idx_photos_taken_at_local" in plan, plan
+        assert "USE TEMP B-TREE FOR ORDER BY" not in plan, plan  # only the tie-break is sorted
+
+
+def test_perf(conn, capsys):
+    # 10,000 photos by default; run with IMAGORY_PERF_N=100000 for the PRD size.
+    n = int(os.environ.get("IMAGORY_PERF_N", "10000"))
+    s1, s2 = add_source(conn, "A"), add_source(conn, "B")
+    rnd = random.Random(1)
+    photos, files = [], []
+    for i in range(1, n + 1):
+        y, m, d = rnd.randint(2005, 2025), rnd.randint(1, 12), rnd.randint(1, 28)
+        taken = f"{y}-{m:02d}-{d:02d}T12:00:00" if i % 50 else None
+        photos.append((i, f"h{i}", None, taken))
+        folder = f"{rnd.randint(2005, 2025)}/Event {i % 300}"
+        status = "missing" if i % 100 == 1 else "ok"
+        files.append((i, s1, i, f"{folder}/IMG_{i:06d}.jpg", status))
+        if i % 10 == 0:
+            files.append((n + i, s2, i, f"Takeout/{folder}/IMG_{i:06d}.jpg", "ok"))
+    with db.transaction(conn):
+        conn.executemany(
+            "INSERT INTO photos (id, content_hash, primary_file_id, taken_at_local) VALUES (?,?,?,?)",
+            photos,
+        )
+        conn.executemany(
+            "INSERT INTO files (id, source_id, photo_id, relative_path, size, modified_time, status, "
+            "first_seen_at, last_seen_at) VALUES (?,?,?,?,1,1,?,'z','z')",
+            files,
+        )
+        conn.execute("UPDATE photos SET primary_file_id = id")
+    cases = {
+        "none": PhotoFilter(),
+        "text": PhotoFilter(text="event 17"),
+        "date": PhotoFilter(date_from="2020-01-01", date_to="2020-12-31"),
+        "source": PhotoFilter(source_ids=frozenset({s2})),
+        "folder": PhotoFilter(folder=(s1, "2015")),
+        "dups": PhotoFilter(has_duplicates=True),
+        "missing": PhotoFilter(missing=True),
+        "combo": PhotoFilter(text="event", date_from="2010-01-01", has_duplicates=True),
+    }
+    lines = []
+    for name, f in cases.items():
+        t0 = time.perf_counter()
+        first = db.filtered_grid_photos(conn, f, 200)
+        t1 = time.perf_counter()
+        rows = db.filtered_grid_photos(conn, f)
+        t2 = time.perf_counter()
+        counts = db.filtered_month_counts(conn, f)
+        t3 = time.perf_counter()
+        assert sum(n for _, n in counts) == len(rows) and rows[:200] == first
+        lines.append(
+            f"{name:8} rows={len(rows):6} first200={t1 - t0:.3f}s all={t2 - t1:.3f}s "
+            f"months={t3 - t2:.3f}s"
+        )
+    with capsys.disabled():
+        print("\n" + "\n".join(lines))
+    t0 = time.perf_counter()
+    db.folder_paths(conn, s1)
+    assert time.perf_counter() - t0 < 2
