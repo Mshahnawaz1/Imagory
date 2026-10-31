@@ -72,3 +72,25 @@ def test_recompute_takeout_with_source_folder_gone(tmp_path, lib):
     with pytest.raises(FileNotFoundError):
         sources.recompute_dates(conn, db.get_source(conn, source.id))
     assert file_row(conn, source, f"{YEAR}/IMG_9.jpg")[2] == "takeout_json"
+
+
+def test_type_change_to_takeout_with_folder_gone_changes_nothing(tmp_path, lib):
+    root, conn = lib
+    src_dir = make_source(tmp_path)
+    source = db.create_source(conn, str(src_dir), "T", "plain")
+    Scanner(conn, source, paths.thumbs_dir(root), root, workers=2).run()
+    shutil.rmtree(src_dir)
+    with pytest.raises(FileNotFoundError):
+        sources.change_source_type(conn, source.id, "takeout")
+    after = db.get_source(conn, source.id)
+    assert (after.type, after.type_overridden) == ("plain", False)
+    assert file_row(conn, source, f"{YEAR}/IMG_9.jpg")[2] == "exif"
+    assert not conn.in_transaction
+
+
+def test_type_change_rejects_unknown_type(tmp_path, lib):
+    _, conn = lib
+    source = db.create_source(conn, str(tmp_path), "T", "plain")
+    with pytest.raises(ValueError):
+        sources.change_source_type(conn, source.id, "zip")
+    assert db.get_source(conn, source.id).type == "plain"
