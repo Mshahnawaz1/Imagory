@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from imagory import db
-from imagory.thumbs import FileJob, FileResult, fold_path, process_batch, source_thumbs_dir
+from imagory.thumbs import FileJob, FileResult, fold_path, process_batch
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,10 @@ class Diff:
 
 
 def diff_files(walked: list[WalkedFile], existing: list[db.FileState]) -> Diff:
-    """Compare a walk with the stored file rows. Paths match case-insensitively (NOCASE)."""
+    """Compare a walk with the stored file rows. Paths match case-insensitively (NOCASE).
+
+    A row without a content hash (from V0) counts as changed, so it is hashed once.
+    """
     by_path = {fold_path(f.relative_path): f for f in existing}
     seen: set[int] = set()
     new_paths: set[str] = set()
@@ -143,7 +146,7 @@ def diff_files(walked: list[WalkedFile], existing: list[db.FileState]) -> Diff:
             result.new.append(item)
             continue
         seen.add(row.id)
-        if row.size != item.size or row.modified_time != item.modified_time:
+        if row.needs_hash or row.size != item.size or row.modified_time != item.modified_time:
             result.changed.append((row.id, item))
             continue
         result.unchanged += 1
@@ -188,7 +191,7 @@ class Scanner:
         self,
         conn: sqlite3.Connection,
         source: db.Source,
-        thumbs_root: Path,  # the library's thumbnail cache; each source has a folder in it
+        thumbs_root: Path,  # the library's thumbnail cache, shared by all sources
         library_root: Path | None = None,
         *,
         workers: int | None = None,
@@ -230,13 +233,14 @@ class Scanner:
         finally:
             db.finish_scan_run(self.conn, run_id, self.source.id, status, counts)
             log.info(
-                "Scan %s of %s: found=%d added=%d updated=%d unchanged=%d missing=%d "
-                "errors=%d skipped=%s",
+                "Scan %s of %s: found=%d added=%d updated=%d moved=%d unchanged=%d "
+                "missing=%d errors=%d skipped=%s",
                 status,
                 self.source.root_path,
                 counts.found,
                 counts.added,
                 counts.updated,
+                counts.moved,
                 counts.unchanged,
                 counts.missing,
                 counts.errors,
@@ -271,11 +275,15 @@ class Scanner:
         jobs.extend(diff.changed)
         if not jobs:
             return "cancelled" if self.cancelled else "completed"
-        self._process(jobs, counts, found=counts.found)
+        self._process(jobs, counts, found=counts.found, disappeared=set(diff.disappeared))
         return "cancelled" if self.cancelled else "completed"
 
     def _process(
-        self, jobs: list[tuple[int | None, WalkedFile]], counts: db.ScanCounts, found: int
+        self,
+        jobs: list[tuple[int | None, WalkedFile]],
+        counts: db.ScanCounts,
+        found: int,
+        disappeared: set[int],
     ) -> None:
         file_ids = {item.relative_path: fid for fid, item in jobs}
         total = len(jobs)
@@ -287,38 +295,34 @@ class Scanner:
             if not pending:
                 return
             now = db.utc_now()
-            added_ids: list[int] = []
+            good = [r for r in pending if not r.error]
+            # A copy of a photo the grid already shows must not be reported to it again.
+            visible = db.visible_photo_ids(self.conn, (r.content_hash for r in good))
+            outcomes: list[tuple[str, int]] = []
             with db.transaction(self.conn):
-                for res in pending:
-                    if res.error:
-                        continue
-                    record = db.FileRecord(
-                        res.relative_path,
-                        res.size,
-                        res.modified_time,
-                        res.width,
-                        res.height,
-                        res.format,
-                        res.taken_at_local,
-                        res.date_source,
-                    )
-                    fid = file_ids[res.relative_path]
-                    if fid is None:
-                        added_ids.append(db.insert_file(self.conn, self.source.id, record, now))
-                    else:
-                        db.update_file(self.conn, fid, record, now)
+                for res in good:
+                    outcomes.append(self._apply(res, file_ids[res.relative_path], now))
             for res in pending:
                 if res.error:
                     counts.errors += 1
                     log.warning("Unreadable image %s: %s", res.relative_path, res.error)
-                elif file_ids[res.relative_path] is None:
+            for outcome, fid in outcomes:
+                if outcome == "added":
                     counts.added += 1
+                elif outcome == "moved":
+                    counts.moved += 1
+                    if fid in disappeared:
+                        counts.missing -= 1  # counted as missing by this scan's diff
                 else:
                     counts.updated += 1
             pending.clear()
-            if self._on_added is not None and added_ids:
+            shown = [fid for outcome, fid in outcomes if outcome != "updated"]
+            if self._on_added is not None and shown:
                 # Committed, so the grid can show these while the scan carries on.
-                self._on_added(db.grid_photos_for_files(self.conn, added_ids))
+                rows = db.grid_photos_for_files(self.conn, shown)
+                rows = [p for p in rows if p.photo_id not in visible]
+                if rows:
+                    self._on_added(rows)
 
         batches = _chunks(
             [FileJob(f.relative_path, f.size, f.modified_time) for _, f in jobs], self.worker_batch
@@ -328,7 +332,8 @@ class Scanner:
         with ProcessPoolExecutor(max_workers=self.workers, mp_context=context) as pool:
             in_flight: set[Future[list[FileResult]]] = set()
             root = str(self.source.root_path)
-            thumbs_root = str(source_thumbs_dir(self.thumbs_root, self.source.id))
+            thumbs_root = str(self.thumbs_root)
+            source_type = self.source.type
             exhausted = False
             try:
                 while True:
@@ -337,7 +342,9 @@ class Scanner:
                         if batch is None:
                             exhausted = True
                             break
-                        in_flight.add(pool.submit(process_batch, root, thumbs_root, batch))
+                        in_flight.add(
+                            pool.submit(process_batch, root, thumbs_root, batch, source_type)
+                        )
                     if not in_flight:
                         break
                     done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
@@ -351,6 +358,35 @@ class Scanner:
             finally:
                 # Whatever finished is kept, even if the scan stops on an unexpected error.
                 flush()
+
+    def _apply(self, res: FileResult, file_id: int | None, now: str) -> tuple[str, int]:
+        """Store one processed file: ('added' | 'updated' | 'moved', file id).
+
+        A new file whose hash matches a missing file of this source is a move: the old
+        row is re-pointed, keeping its id and first-seen date (PRD §8.2).
+        """
+        record = db.FileRecord(
+            res.relative_path,
+            res.size,
+            res.modified_time,
+            res.width,
+            res.height,
+            res.format,
+            res.taken_at_local,
+            res.date_source,
+            content_hash=res.content_hash,
+            taken_at_utc=res.taken_at_utc,
+            exif_taken_at=res.exif_taken_at,
+            exif_offset=res.exif_offset,
+        )
+        if file_id is not None:
+            db.update_file(self.conn, file_id, record, now)
+            return "updated", file_id
+        moved = db.find_moved_file(self.conn, self.source.id, res.content_hash)
+        if moved is not None:
+            db.update_file(self.conn, moved, record, now)
+            return "moved", moved
+        return "added", db.insert_file(self.conn, self.source.id, record, now)
 
 
 def _chunks(items: list[FileJob], size: int) -> Iterator[list[FileJob]]:

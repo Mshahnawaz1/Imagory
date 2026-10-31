@@ -42,6 +42,7 @@ def summary_text(summary: ScanSummary) -> str:
         f"Found: {c.found:,}",
         f"Added: {c.added:,}",
         f"Updated: {c.updated:,}",
+        f"Moved: {c.moved:,}",
         f"Unchanged: {c.unchanged:,}",
         f"Missing: {c.missing:,}",
         f"Errors (unreadable files): {c.errors:,}",
@@ -477,6 +478,15 @@ class MainWindow(QMainWindow):
         sources.remove_source(self.conn, self.thumbs_root, source_id)
         self._sources_updated()
         self.reload_grid()
+
+    def remove_missing_items(self, source_id: int) -> db.RemovedMissing:
+        """Forget the source's missing files and photos left without files. Only after the
+        user confirms (in the sources dialog)."""
+        assert not self.scanning
+        removed = sources.remove_missing(self.conn, self.thumbs_root, source_id)
+        self._sources_updated()
+        self.reload_grid()
+        return removed
 
     # --- scanning -----------------------------------------------------------------------
 

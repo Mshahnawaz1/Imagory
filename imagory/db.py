@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from imagory.dates import SOURCE_RANK, DateResult, best_photo_date
+
 log = logging.getLogger(__name__)
 
 
@@ -142,7 +144,49 @@ def _migration_1(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_1]
+def _migration_2(conn: sqlite3.Connection) -> None:
+    """Manual albums (PRD §8.8). Deleting an album or a photo removes memberships only."""
+    _execute_script(
+        conn,
+        """
+        CREATE TABLE albums (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE album_photos (
+            album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+            photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            added_at TEXT NOT NULL,
+            PRIMARY KEY (album_id, photo_id)
+        );
+
+        CREATE INDEX idx_album_photos_photo_id ON album_photos(photo_id);
+        """,
+    )
+
+
+def _migration_3(conn: sqlite3.Connection) -> None:
+    """V1 duplicates, moves, and dates (PRD §8.2, §8.4, §8.5). Schema only.
+
+    V0 files keep an empty ``content_hash``, so the next scan treats them as changed,
+    hashes them, and reattaches them to photos by hash (merging duplicates). V0 photos
+    left with no files are deleted then. The EXIF columns keep the raw date inputs, so
+    dates can be recomputed (e.g. on a source type change) without rescanning.
+    """
+    _execute_script(
+        conn,
+        """
+        ALTER TABLE files ADD COLUMN exif_taken_at TEXT;
+        ALTER TABLE files ADD COLUMN exif_offset TEXT;
+        ALTER TABLE scan_runs ADD COLUMN moved INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX idx_files_source_hash ON files(source_id, content_hash);
+        """,
+    )
+
+
+MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -293,25 +337,68 @@ def source_file_paths(conn: sqlite3.Connection, source_id: int, limit: int) -> l
 def delete_source(conn: sqlite3.Connection, source_id: int) -> None:
     """Delete a source with its files, scan runs, and photos left without files.
 
+    Photos that keep files in other sources get their primary copy and date recomputed.
     Only ever called after the user confirms. Files on disk are not touched.
     """
-    # Albums (PRD §8.8) do not exist yet; their memberships must go with the photos here.
+    # Album memberships (PRD §8.8) go with the photos via ON DELETE CASCADE.
     with transaction(conn):
-        photo_ids = [
-            r[0]
-            for r in conn.execute(
-                "SELECT DISTINCT photo_id FROM files WHERE source_id = ? AND photo_id IS NOT NULL",
-                (source_id,),
-            )
-        ]
+        photo_ids = _photo_ids_of(conn, "source_id = ?", (source_id,))
         conn.execute("DELETE FROM files WHERE source_id = ?", (source_id,))
-        conn.executemany(
-            "DELETE FROM photos WHERE id = ? AND NOT EXISTS "
-            "(SELECT 1 FROM files WHERE files.photo_id = photos.id)",
-            ((pid,) for pid in photo_ids),
-        )
+        refresh_photos(conn, photo_ids)
         conn.execute("DELETE FROM scan_runs WHERE source_id = ?", (source_id,))
         conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+
+
+def source_orphan_hashes(conn: sqlite3.Connection, source_id: int) -> list[str]:
+    """Hashes of photos whose files are all in this source, i.e. the photos (and
+    thumbnails) that removing the source would leave unreferenced."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT p.content_hash FROM photos p WHERE p.content_hash IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM files f WHERE f.photo_id = p.id AND f.source_id = ?) "
+            "AND NOT EXISTS (SELECT 1 FROM files f WHERE f.photo_id = p.id "
+            "AND f.source_id <> ?)",
+            (source_id, source_id),
+        )
+    ]
+
+
+def missing_orphan_hashes(conn: sqlite3.Connection, source_id: int) -> list[str]:
+    """Hashes of photos whose only files are this source's missing files, i.e. the
+    photos (and thumbnails) that :func:`delete_missing_files` would remove."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT p.content_hash FROM photos p WHERE p.content_hash IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM files f WHERE f.photo_id = p.id AND f.source_id = ? "
+            "AND f.status = 'missing') "
+            "AND NOT EXISTS (SELECT 1 FROM files f WHERE f.photo_id = p.id "
+            "AND (f.source_id <> ? OR f.status <> 'missing'))",
+            (source_id, source_id),
+        )
+    ]
+
+
+@dataclass(frozen=True)
+class RemovedMissing:
+    files: int
+    photos: int
+
+
+def delete_missing_files(conn: sqlite3.Connection, source_id: int) -> RemovedMissing:
+    """Delete a source's missing file rows and the photos left with no files (PRD §8.2).
+
+    Only ever called after the user confirms; never automatic. Files on disk are not
+    touched. Photos keeping other files get their primary copy and date recomputed.
+    """
+    with transaction(conn):
+        photo_ids = _photo_ids_of(conn, "source_id = ? AND status = 'missing'", (source_id,))
+        files = conn.execute(
+            "DELETE FROM files WHERE source_id = ? AND status = 'missing'", (source_id,)
+        ).rowcount
+        photos = refresh_photos(conn, photo_ids)
+    return RemovedMissing(files, photos)
 
 
 # --- files (scan) -----------------------------------------------------------------------
@@ -326,26 +413,34 @@ class FileState:
     size: int
     modified_time: int
     status: str
+    needs_hash: bool = False  # no content hash yet (a V0 row): reprocess it
 
 
 def load_file_states(conn: sqlite3.Connection, source_id: int) -> list[FileState]:
     return [
-        FileState(*row)
-        for row in conn.execute(
-            "SELECT id, relative_path, size, modified_time, status FROM files WHERE source_id = ?",
+        FileState(r[0], r[1], r[2], r[3], r[4], bool(r[5]))
+        for r in conn.execute(
+            "SELECT id, relative_path, size, modified_time, status, content_hash IS NULL "
+            "FROM files WHERE source_id = ?",
             (source_id,),
         )
     ]
 
 
 def mark_missing(conn: sqlite3.Connection, file_ids: Iterable[int]) -> None:
+    """Mark files missing; a missing primary copy hands over to the next copy."""
+    file_ids = list(file_ids)
     conn.executemany(
         "UPDATE files SET status = 'missing' WHERE id = ?", ((fid,) for fid in file_ids)
     )
+    _refresh_primaries(conn, _photo_ids_of_files(conn, file_ids))
 
 
 def mark_ok(conn: sqlite3.Connection, file_ids: Iterable[int]) -> None:
+    """Mark files present again; the primary copy is recomputed."""
+    file_ids = list(file_ids)
     conn.executemany("UPDATE files SET status = 'ok' WHERE id = ?", ((fid,) for fid in file_ids))
+    _refresh_primaries(conn, _photo_ids_of_files(conn, file_ids))
 
 
 def update_relative_paths(conn: sqlite3.Connection, changes: Iterable[tuple[int, str]]) -> None:
@@ -364,7 +459,10 @@ def touch_seen(conn: sqlite3.Connection, source_id: int, seen_at: str) -> None:
 
 @dataclass(frozen=True)
 class FileRecord:
-    """A processed file ready to store. Mirrors the worker's result."""
+    """A processed file ready to store. Mirrors the worker's result.
+
+    ``content_hash`` None (tests and V0-style callers only) always creates a new photo.
+    """
 
     relative_path: str
     size: int
@@ -374,68 +472,142 @@ class FileRecord:
     format: str
     taken_at_local: str
     date_source: str
+    content_hash: str | None = None
+    taken_at_utc: str | None = None
+    exif_taken_at: str | None = None  # raw date inputs, kept so dates can be recomputed
+    exif_offset: str | None = None
+    sidecar_relative_path: str | None = None  # Takeout only (wave 2)
+
+
+def find_moved_file(conn: sqlite3.Connection, source_id: int, content_hash: str) -> int | None:
+    """A missing file of this source with the same contents as a new file, if any.
+
+    A new file matching one is a move (PRD §8.2): the old row is re-pointed. Any missing
+    row counts, not only ones that disappeared in this scan, so a move is still found
+    after a cancelled scan without saved state. Oldest row first, for determinism.
+    """
+    row = conn.execute(
+        "SELECT id FROM files WHERE source_id = ? AND content_hash = ? AND status = 'missing' "
+        "ORDER BY first_seen_at, id LIMIT 1",
+        (source_id, content_hash),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def insert_file(conn: sqlite3.Connection, source_id: int, rec: FileRecord, now: str) -> int:
-    """Insert a new file and its photo (one photo per file in V0). Returns the file id."""
-    photo_id = conn.execute(
-        "INSERT INTO photos (width, height, format, taken_at_local, date_source) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (rec.width, rec.height, rec.format, rec.taken_at_local, rec.date_source),
-    ).lastrowid
+    """Insert a new file and attach it to the photo with its hash (created if needed).
+
+    Returns the file id. The photo's primary copy and date are recomputed.
+    """
+    photo_id = _photo_for_hash(conn, rec.content_hash)
+    if photo_id is None:
+        photo_id = _create_photo(conn, rec)
     file_id = conn.execute(
-        "INSERT INTO files (source_id, photo_id, relative_path, size, modified_time, status, "
-        "taken_at_local, date_source, first_seen_at, last_seen_at) "
-        "VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?)",
+        "INSERT INTO files (source_id, photo_id, relative_path, size, modified_time, "
+        "content_hash, status, taken_at_local, taken_at_utc, date_source, exif_taken_at, "
+        "exif_offset, sidecar_relative_path, first_seen_at, last_seen_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             source_id,
             photo_id,
             rec.relative_path,
             rec.size,
             rec.modified_time,
+            rec.content_hash,
             rec.taken_at_local,
+            rec.taken_at_utc,
             rec.date_source,
+            rec.exif_taken_at,
+            rec.exif_offset,
+            rec.sidecar_relative_path,
             now,
             now,
         ),
     ).lastrowid
-    conn.execute("UPDATE photos SET primary_file_id = ? WHERE id = ?", (file_id, photo_id))
+    refresh_photos(conn, [photo_id])
     return file_id
 
 
 def update_file(conn: sqlite3.Connection, file_id: int, rec: FileRecord, now: str) -> None:
-    """Store reprocessed results for a changed (or reappeared and changed) file."""
+    """Store reprocessed results for a changed, reappeared, rehashed (V0), or moved file.
+
+    The file keeps its id and ``first_seen_at``. If its hash changed it moves to the
+    photo with the new hash. When it was its photo's only file and no photo has the new
+    hash yet, that photo is re-keyed instead, so it keeps its id (and album memberships).
+    A photo left with no files is deleted.
+    """
+    row = conn.execute("SELECT photo_id FROM files WHERE id = ?", (file_id,)).fetchone()
+    old_photo = row[0] if row else None
+    photo_id = _photo_for_hash(conn, rec.content_hash)
+    if photo_id is None:
+        sole = (
+            old_photo is not None
+            and not conn.execute(
+                "SELECT 1 FROM files WHERE photo_id = ? AND id <> ? LIMIT 1", (old_photo, file_id)
+            ).fetchone()
+        )
+        if sole:
+            photo_id = old_photo
+            conn.execute(
+                "UPDATE photos SET content_hash = ?, width = ?, height = ?, format = ? "
+                "WHERE id = ?",
+                (rec.content_hash, rec.width, rec.height, rec.format, photo_id),
+            )
+        else:
+            photo_id = _create_photo(conn, rec)
     conn.execute(
-        "UPDATE files SET relative_path = ?, size = ?, modified_time = ?, status = 'ok', "
-        "taken_at_local = ?, date_source = ?, last_seen_at = ? WHERE id = ?",
+        "UPDATE files SET photo_id = ?, relative_path = ?, size = ?, modified_time = ?, "
+        "content_hash = ?, status = 'ok', taken_at_local = ?, taken_at_utc = ?, "
+        "date_source = ?, exif_taken_at = ?, exif_offset = ?, sidecar_relative_path = ?, "
+        "last_seen_at = ? WHERE id = ?",
         (
+            photo_id,
             rec.relative_path,
             rec.size,
             rec.modified_time,
+            rec.content_hash,
             rec.taken_at_local,
+            rec.taken_at_utc,
             rec.date_source,
+            rec.exif_taken_at,
+            rec.exif_offset,
+            rec.sidecar_relative_path,
             now,
             file_id,
         ),
     )
-    photo_id = conn.execute("SELECT photo_id FROM files WHERE id = ?", (file_id,)).fetchone()[0]
-    if photo_id is None:
-        photo_id = conn.execute("INSERT INTO photos (primary_file_id) VALUES (?)", (file_id,))
-        photo_id = photo_id.lastrowid
-        conn.execute("UPDATE files SET photo_id = ? WHERE id = ?", (photo_id, file_id))
-    conn.execute(
-        "UPDATE photos SET width = ?, height = ?, format = ?, taken_at_local = ?, "
-        "date_source = ?, primary_file_id = ? WHERE id = ?",
-        (
-            rec.width,
-            rec.height,
-            rec.format,
-            rec.taken_at_local,
-            rec.date_source,
-            file_id,
-            photo_id,
-        ),
-    )
+    if (
+        old_photo is not None
+        and old_photo != photo_id
+        and not conn.execute(
+            "SELECT 1 FROM files WHERE photo_id = ? LIMIT 1", (old_photo,)
+        ).fetchone()
+    ):
+        # The old photo is about to be deleted; its album memberships follow the file.
+        conn.execute(
+            "INSERT OR IGNORE INTO album_photos (album_id, photo_id, added_at) "
+            "SELECT album_id, ?, added_at FROM album_photos WHERE photo_id = ?",
+            (photo_id, old_photo),
+        )
+    refresh_photos(conn, [pid for pid in dict.fromkeys((photo_id, old_photo)) if pid is not None])
+
+
+def visible_photo_ids(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[int]:
+    """Photos with these hashes that the grid shows now (their primary copy is ok)."""
+    hashes = list(set(hashes))
+    found: set[int] = set()
+    for start in range(0, len(hashes), 500):
+        chunk = hashes[start : start + 500]
+        placeholders = ",".join("?" * len(chunk))
+        found.update(
+            r[0]
+            for r in conn.execute(
+                "SELECT p.id FROM photos p JOIN files f ON f.id = p.primary_file_id "
+                f"WHERE p.content_hash IN ({placeholders}) AND f.status = 'ok'",
+                chunk,
+            )
+        )
+    return found
 
 
 # --- scan runs --------------------------------------------------------------------------
@@ -450,6 +622,7 @@ class ScanCounts:
     missing: int = 0
     errors: int = 0
     skipped_by_ext: dict[str, int] | None = None
+    moved: int = 0  # new paths re-pointed to a missing row with the same hash (PRD §8.2)
 
 
 def start_scan_run(conn: sqlite3.Connection, source_id: int, started_at: str) -> int:
@@ -466,7 +639,7 @@ def finish_scan_run(
     with transaction(conn):
         conn.execute(
             "UPDATE scan_runs SET finished_at = ?, status = ?, found = ?, added = ?, updated = ?, "
-            "unchanged = ?, missing = ?, errors = ?, skipped_by_ext = ? WHERE id = ?",
+            "unchanged = ?, missing = ?, errors = ?, skipped_by_ext = ?, moved = ? WHERE id = ?",
             (
                 finished,
                 status,
@@ -477,6 +650,7 @@ def finish_scan_run(
                 counts.missing,
                 counts.errors,
                 json.dumps(counts.skipped_by_ext or {}, sort_keys=True),
+                counts.moved,
                 run_id,
             ),
         )
@@ -502,6 +676,7 @@ class GridPhoto(NamedTuple):
     format: str | None
     taken_at_local: str | None
     date_source: str | None
+    content_hash: str | None = None  # thumbnail key; None until a V0 row is rescanned
 
 
 def grid_photos(
@@ -517,7 +692,7 @@ def grid_photos(
     cur.execute(
         "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
         # CROSS JOIN makes SQLite walk photos in taken_at_local order, so a LIMIT stops early.
-        "p.taken_at_local, p.date_source FROM photos p CROSS JOIN files f "
+        "p.taken_at_local, p.date_source, p.content_hash FROM photos p CROSS JOIN files f "
         "ON f.id = p.primary_file_id WHERE f.status = 'ok' "
         "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT ? OFFSET ?",
         (-1 if limit is None else limit, offset),
@@ -582,11 +757,253 @@ def grid_photos_for_files(conn: sqlite3.Connection, file_ids: list[int]) -> list
     placeholders = ",".join("?" * len(file_ids))
     cur.execute(
         "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
-        "p.taken_at_local, p.date_source FROM photos p JOIN files f ON f.id = p.primary_file_id "
+        "p.taken_at_local, p.date_source, p.content_hash FROM photos p "
+        "JOIN files f ON f.id = p.primary_file_id "
         f"WHERE f.id IN ({placeholders}) AND f.status = 'ok'",
         file_ids,
     )
     return list(map(GridPhoto._make, cur))
+
+
+# --- photos (identity, primary copy, dates) -----------------------------------------
+# A photo is identified by its content hash (PRD §8.5): all files with that hash belong
+# to it. Its primary copy is the first ok file by source added date, then first seen, then
+# id. If all its files are missing the first missing one is kept as primary, so the photo
+# stays hidden from the grid but can still be shown by a "Missing" filter. Its date is the
+# best date across all its files, missing ones included (PRD §8.4).
+
+_PRIMARY_SQL = (
+    "UPDATE photos SET primary_file_id = (SELECT f.id FROM files f "
+    "JOIN sources s ON s.id = f.source_id WHERE f.photo_id = photos.id "
+    "ORDER BY f.status <> 'ok', s.added_at, s.id, f.first_seen_at, f.id LIMIT 1) WHERE id = ?"
+)
+
+
+def _photo_for_hash(conn: sqlite3.Connection, content_hash: str | None) -> int | None:
+    if content_hash is None:
+        return None
+    row = conn.execute("SELECT id FROM photos WHERE content_hash = ?", (content_hash,)).fetchone()
+    return row[0] if row else None
+
+
+def _create_photo(conn: sqlite3.Connection, rec: FileRecord) -> int:
+    return conn.execute(
+        "INSERT INTO photos (content_hash, width, height, format) VALUES (?, ?, ?, ?)",
+        (rec.content_hash, rec.width, rec.height, rec.format),
+    ).lastrowid
+
+
+def _photo_ids_of(conn: sqlite3.Connection, where: str, params: tuple) -> list[int]:
+    """Distinct photo ids of the files matching ``where`` (a fixed SQL fragment)."""
+    return [
+        r[0]
+        for r in conn.execute(
+            f"SELECT DISTINCT photo_id FROM files WHERE {where} AND photo_id IS NOT NULL", params
+        )
+    ]
+
+
+def _photo_ids_of_files(conn: sqlite3.Connection, file_ids: list[int]) -> set[int]:
+    found: set[int] = set()
+    for start in range(0, len(file_ids), 500):
+        chunk = file_ids[start : start + 500]
+        placeholders = ",".join("?" * len(chunk))
+        found.update(
+            r[0]
+            for r in conn.execute(
+                f"SELECT photo_id FROM files WHERE id IN ({placeholders}) AND photo_id IS NOT NULL",
+                chunk,
+            )
+        )
+    return found
+
+
+def _refresh_primaries(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> None:
+    conn.executemany(_PRIMARY_SQL, ((pid,) for pid in photo_ids))
+
+
+def _refresh_date(conn: sqlite3.Connection, photo_id: int) -> None:
+    candidates = [
+        DateResult(r[0], r[1], r[2])
+        for r in conn.execute(
+            "SELECT taken_at_local, taken_at_utc, date_source FROM files WHERE photo_id = ?",
+            (photo_id,),
+        )
+        if r[0] and r[2] in SOURCE_RANK
+    ]
+    best = best_photo_date(candidates)
+    conn.execute(
+        "UPDATE photos SET taken_at_local = ?, taken_at_utc = ?, date_source = ? WHERE id = ?",
+        (
+            best.taken_at_local if best else None,
+            best.taken_at_utc if best else None,
+            best.date_source if best else None,
+            photo_id,
+        ),
+    )
+
+
+def refresh_photos(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> int:
+    """Recompute the primary copy and date of photos whose files changed, and delete those
+    left with no file rows at all (missing rows count as files). Returns how many were
+    deleted. Called while a scan applies results and by confirmed user removals."""
+    deleted = 0
+    for photo_id in photo_ids:
+        if not conn.execute(
+            "SELECT 1 FROM files WHERE photo_id = ? LIMIT 1", (photo_id,)
+        ).fetchone():
+            conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+            deleted += 1
+            continue
+        conn.execute(_PRIMARY_SQL, (photo_id,))
+        _refresh_date(conn, photo_id)
+    return deleted
+
+
+# --- albums -----------------------------------------------------------------------------
+# Manual albums (PRD §8.8). Albums are a user action outside scans. Membership rows go away
+# through ON DELETE CASCADE when an album or a photo is deleted; photos are never touched.
+
+
+class AlbumNameError(ValueError):
+    """The album name is empty or already used (names are unique, case-insensitively)."""
+
+
+@dataclass(frozen=True)
+class Album:
+    id: int
+    name: str
+    created_at: str
+    photo_count: int  # visible photos only (same rows the album view shows)
+
+
+def _clean_album_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise AlbumNameError("The album name cannot be empty.")
+    return name
+
+
+def list_albums(conn: sqlite3.Connection) -> list[Album]:
+    """All albums by name, with the number of visible (not missing) photos in each."""
+    rows = conn.execute(
+        "SELECT a.id, a.name, a.created_at, COUNT(f.id) FROM albums a "
+        "LEFT JOIN album_photos ap ON ap.album_id = a.id "
+        "LEFT JOIN photos p ON p.id = ap.photo_id "
+        "LEFT JOIN files f ON f.id = p.primary_file_id AND f.status = 'ok' "
+        "GROUP BY a.id ORDER BY a.name COLLATE NOCASE, a.id"
+    )
+    return [Album(r[0], r[1], r[2], r[3]) for r in rows]
+
+
+def create_album(conn: sqlite3.Connection, name: str) -> int:
+    name = _clean_album_name(name)
+    try:
+        with transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO albums (name, created_at) VALUES (?, ?)", (name, utc_now())
+            )
+    except sqlite3.IntegrityError as exc:
+        raise AlbumNameError(f"An album named '{name}' already exists.") from exc
+    assert cur.lastrowid is not None
+    return cur.lastrowid
+
+
+def rename_album(conn: sqlite3.Connection, album_id: int, name: str) -> None:
+    name = _clean_album_name(name)
+    try:
+        with transaction(conn):
+            conn.execute("UPDATE albums SET name = ? WHERE id = ?", (name, album_id))
+    except sqlite3.IntegrityError as exc:
+        raise AlbumNameError(f"An album named '{name}' already exists.") from exc
+
+
+def delete_album(conn: sqlite3.Connection, album_id: int) -> None:
+    """Delete an album and its memberships. Photos and files are not affected."""
+    with transaction(conn):
+        conn.execute("DELETE FROM albums WHERE id = ?", (album_id,))
+
+
+def add_photos_to_album(conn: sqlite3.Connection, album_id: int, photo_ids: Iterable[int]) -> int:
+    """Add photos to an album; photos already in it are skipped. Returns how many are new."""
+    now = utc_now()
+    with transaction(conn):
+        before = conn.total_changes
+        conn.executemany(
+            "INSERT OR IGNORE INTO album_photos (album_id, photo_id, added_at) VALUES (?, ?, ?)",
+            ((album_id, pid, now) for pid in dict.fromkeys(photo_ids)),
+        )
+        return conn.total_changes - before
+
+
+def remove_photos_from_album(
+    conn: sqlite3.Connection, album_id: int, photo_ids: Iterable[int]
+) -> int:
+    """Remove photos from an album (the photos themselves stay). Returns how many were in it."""
+    with transaction(conn):
+        before = conn.total_changes
+        conn.executemany(
+            "DELETE FROM album_photos WHERE album_id = ? AND photo_id = ?",
+            ((album_id, pid) for pid in dict.fromkeys(photo_ids)),
+        )
+        return conn.total_changes - before
+
+
+def albums_for_photo(conn: sqlite3.Connection, photo_id: int) -> list[int]:
+    """Ids of the albums containing a photo."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT album_id FROM album_photos WHERE photo_id = ? ORDER BY album_id", (photo_id,)
+        )
+    ]
+
+
+def album_ids_for_photos(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> dict[int, set[int]]:
+    """``{album_id: {photo_ids from the given ones that are in it}}``; empty albums omitted."""
+    result: dict[int, set[int]] = {}
+    ids = list(dict.fromkeys(photo_ids))
+    for start in range(0, len(ids), 500):  # stay under SQLite's variable limit
+        chunk = ids[start : start + 500]
+        rows = conn.execute(
+            "SELECT album_id, photo_id FROM album_photos "
+            f"WHERE photo_id IN ({','.join('?' * len(chunk))})",
+            chunk,
+        )
+        for album_id, photo_id in rows:
+            result.setdefault(album_id, set()).add(photo_id)
+    return result
+
+
+def album_grid_photos(
+    conn: sqlite3.Connection, album_id: int, limit: int | None = None, offset: int = 0
+) -> list[GridPhoto]:
+    """Visible photos of one album, with the columns and order of :func:`grid_photos`."""
+    cur = conn.cursor()
+    cur.row_factory = None
+    cur.execute(
+        "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
+        "p.taken_at_local, p.date_source, p.content_hash FROM album_photos ap "
+        "JOIN photos p ON p.id = ap.photo_id CROSS JOIN files f "
+        "ON f.id = p.primary_file_id WHERE ap.album_id = ? AND f.status = 'ok' "
+        "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT ? OFFSET ?",
+        (album_id, -1 if limit is None else limit, offset),
+    )
+    return list(map(GridPhoto._make, cur))
+
+
+def album_month_counts(conn: sqlite3.Connection, album_id: int) -> list[tuple[str | None, int]]:
+    """``("YYYY-MM", n)`` newest first, then ``(None, n)`` for unknown dates, over the same
+    rows as :func:`album_grid_photos`."""
+    rows = conn.execute(
+        "SELECT substr(p.taken_at_local, 1, 7) AS month, COUNT(*) FROM album_photos ap "
+        "JOIN photos p ON p.id = ap.photo_id JOIN files f ON f.id = p.primary_file_id "
+        "WHERE ap.album_id = ? AND f.status = 'ok' GROUP BY month ORDER BY month DESC",
+        (album_id,),
+    ).fetchall()
+    dated = [(m, n) for m, n in rows if m is not None]
+    undated = [(None, n) for m, n in rows if m is None]
+    return dated + undated
 
 
 # --- settings ---------------------------------------------------------------------------

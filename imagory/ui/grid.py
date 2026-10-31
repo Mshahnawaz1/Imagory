@@ -287,9 +287,7 @@ def thumbnail_file(thumbs_root: Path, source: Source, photo: GridPhoto) -> Path 
     PRD §8.5) changes this one function. Runs on a loader thread; reads the photo only.
     """
     return thumbs.ensure_thumbnail(
-        Path(source.root_path),
-        thumbs.source_thumbs_dir(thumbs_root, source.id),
-        photo.relative_path,
+        Path(source.root_path), thumbs_root, photo.relative_path, photo.content_hash
     )
 
 

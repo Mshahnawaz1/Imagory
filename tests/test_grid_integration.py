@@ -233,7 +233,17 @@ def test_thumbnails_cache_is_limited_and_regenerates_missing(tmp_path, qtbot):
     thumbs_root = tmp_path / "thumbs"
     source = db.Source(1, "A", str(src), "plain", False, NOW, None)
     photos = [
-        db.GridPhoto(i, 1, f"{i}.jpg", 200, 100, "JPEG", "2020-01-01T00:00:00", "exif")
+        db.GridPhoto(
+            i,
+            1,
+            f"{i}.jpg",
+            200,
+            100,
+            "JPEG",
+            "2020-01-01T00:00:00",
+            "exif",
+            thumbs.hash_bytes((src / f"{i}.jpg").read_bytes()),
+        )
         for i in range(6)
     ]
     provider = PhotoThumbnails(thumbs_root, {1: source}, cache_items=3)
@@ -245,8 +255,7 @@ def test_thumbnails_cache_is_limited_and_regenerates_missing(tmp_path, qtbot):
         assert pix is not None and max(pix.width(), pix.height()) == mw_icon_size()
     assert provider.cached_count() == 3
     assert [provider.cached(i) is not None for i in range(6)] == [False] * 3 + [True] * 3
-    folder = thumbs.source_thumbs_dir(thumbs_root, 1)
-    assert all(thumbs.thumb_path(folder, p.relative_path).exists() for p in photos)
+    assert all(thumbs.thumb_path(thumbs_root, p.content_hash).exists() for p in photos)
     assert snapshot(src) == before  # the source folder is never written to
 
     # A photo whose source is unknown (being removed) is never loaded.

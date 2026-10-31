@@ -43,8 +43,13 @@ def lib(library):
     conn.close()
 
 
-def source_thumbs(root, source):
-    return thumbs.source_thumbs_dir(paths.thumbs_dir(root), source.id)
+def thumb_of(conn, root, source, rel):
+    """The thumbnail path of a file row, keyed by its content hash."""
+    (content_hash,) = conn.execute(
+        "SELECT content_hash FROM files WHERE source_id = ? AND relative_path = ?",
+        (source.id, rel),
+    ).fetchone()
+    return thumbs.thumb_path(paths.thumbs_dir(root), content_hash)
 
 
 def scan(conn, source, root, **kwargs):
@@ -65,7 +70,7 @@ def test_full_scan_rescan_modify_delete(source_dir, lib):
 
     rows = {r["relative_path"]: r for r in conn.execute("SELECT * FROM files")}
     assert set(rows) == {"2019/a.jpg", "2019/b.JPG", "2020/c.png", "2020/deep/d.gif", "e.heic"}
-    assert all(r["status"] == "ok" and r["content_hash"] is None for r in rows.values())
+    assert all(r["status"] == "ok" and len(r["content_hash"]) == 32 for r in rows.values())
     assert rows["2019/a.jpg"]["taken_at_local"] == "2019-01-31T23:59:59"
     assert rows["2019/a.jpg"]["date_source"] == "exif"
     assert rows["2020/c.png"]["date_source"] == "mtime"
@@ -76,7 +81,7 @@ def test_full_scan_rescan_modify_delete(source_dir, lib):
     assert (photo["width"], photo["height"], photo["format"]) == (300, 200, "JPEG")
     assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 5
     for rel in rows:
-        assert thumbs.thumb_path(source_thumbs(root, source), rel).exists()
+        assert thumb_of(conn, root, source, rel).exists()
     grid = db.grid_photos(conn)
     # Newest first: mtime-dated files (today) come before the 2019 EXIF dates.
     assert [p.relative_path for p in grid][-2:] == ["2019/b.JPG", "2019/a.jpg"]
@@ -216,8 +221,8 @@ def test_two_sources_with_the_same_paths_stay_apart(source_dir, tmp_path, lib):
     assert len(grid) == 6
     same = [p for p in grid if p.relative_path == "2019/a.jpg"]
     assert sorted(p.source_id for p in same) == [first.id, second.id]
-    a_first = thumbs.thumb_path(source_thumbs(root, first), "2019/a.jpg")
-    a_second = thumbs.thumb_path(source_thumbs(root, second), "2019/a.jpg")
+    a_first = thumb_of(conn, root, first, "2019/a.jpg")
+    a_second = thumb_of(conn, root, second, "2019/a.jpg")
     assert a_first != a_second and a_first.exists() and a_second.exists()
 
     # Rescanning one source never marks the other's files missing.
@@ -235,13 +240,15 @@ def test_remove_source_deletes_its_rows_and_thumbnails_only(source_dir, tmp_path
     second = db.create_source(conn, str(other), "other")
     scan(conn, first, root)
     scan(conn, second, root)
+    first_thumbs = [thumb_of(conn, root, first, r) for r in ("2019/a.jpg", "e.heic")]
+    x_thumb = thumb_of(conn, root, second, "x.jpg")
     sources.remove_source(conn, paths.thumbs_dir(root), first.id)
     assert [s.id for s in db.list_sources(conn)] == [second.id]
     assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 1
     assert db.scan_runs(conn, first.id) == []
-    assert not source_thumbs(root, first).exists()
-    assert thumbs.thumb_path(source_thumbs(root, second), "x.jpg").exists()
+    assert not any(t.exists() for t in first_thumbs)
+    assert x_thumb.exists()
     assert [p.relative_path for p in db.grid_photos(conn)] == ["x.jpg"]
     assert snapshot(source_dir) == before
 
