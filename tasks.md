@@ -5,13 +5,8 @@ committed. Completed work is listed at the end, one line per task.
 
 ## Next: V1 wave 2
 
-Wave 1 is merged (see `docs/v1-agents.md`). Remaining V1 work:
+Waves 1 and 2 are merged. Remaining V1 work:
 
-- [ ] §8.3/§8.4 Takeout in the scan: keep JSON names from the walk, `match_directory` per folder, read sidecars, fill `FileJob.takeout_timestamp` and `sidecar_relative_path`, skip Trash, set photo latitude/longitude, edited copies use the original's date, log the matching report
-- [ ] §8.1/§8.4 Recompute dates on a source type change (from stored EXIF inputs, filename, mtime, sidecar)
-- [ ] §8.7 Filter bar in the main window: switch the grid's row/count queries and scan-row `accepts`; `db.month_counts` for an empty filter; filtered count in the status bar
-- [ ] §8.8 Albums in the main window: Albums menu, "Add to album" on toolbar and right-click menu for the selection, album view, "Remove from album"; disable album actions while a scan runs (decided)
-- [ ] §8.6 Browsing: viewer zoom/pan, info panel (date and its source, location, source, path, size, dimensions, "Also found in…"), Show in Explorer, "Open in viewer" in the right-click menu
 - [ ] Rerun the 100k bench on Windows and judge scrolling by eye
 
 ## Open from V0
@@ -47,3 +42,9 @@ Wave 1 is merged (see `docs/v1-agents.md`). Remaining V1 work:
   - §8.6 `PhotoGrid` in the app: month counts, DB data source, thumbnail provider, bench on WSL
   - §8.7 filter queries and `FilterBar` widget (not yet in the main window)
   - §8.8 albums schema (migration 2), queries, Albums and Add-to-album dialogs (not yet in the main window)
+- [x] Wave 2 (three parallel agents, branches merged into `main`):
+  - §8.3/§8.4 Takeout in the scan: sidecars matched per folder, Trash skipped, takeout timestamp and photo location stored, edited copies inherit date and location, matching report logged
+  - §8.1/§8.4 `sources.change_source_type` recomputes dates (no UI calls it yet)
+  - §8.7 filter bar wired into the main window; filtered count in the status bar
+  - §8.8 Albums menu, "Add to album" (toolbar and right-click), album view, "Remove from album", disabled during scans
+  - §8.6 viewer zoom/pan, info panel, Show in Explorer, "Open in viewer" in the right-click menu

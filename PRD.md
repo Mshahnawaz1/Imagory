@@ -420,6 +420,10 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Photo date across copies | Best source rank (takeout_json, exif, filename, mtime); ties go to a known UTC time, then the earliest local time, then the earliest UTC time, so input order never matters |
 | Grid view (V1) | Custom `QAbstractScrollArea` with a Qt-free layout computed from per-month counts (bisect lookups); data source and thumbnail provider are interfaces, so the widget never touches the database; selection stored as a bytearray; vertical scrollbar always shown to avoid reflow loops |
 | Fake Takeout truncation | Sidecar stem cut to 46 characters before `.json` (51 in total), with a numbered duplicate's counter added after the cut; to validate against real exports |
+| Takeout in the scan | Sidecars are matched per folder after the walk and read only for new or changed images, so a sidecar added later is picked up only by a source type change (recompute). The matching report covers every image in the walk. Location is stored on the photo and never cleared by a missing one; edited copies inherit the original's date and location |
+| Date recompute | `sources.change_source_type` recomputes dates only (no photo re-read, Trash rule not applied retroactively); a Takeout source needs its folder present, otherwise nothing changes |
+| Filter and album view | The album view is the filter with `album_id` set, so they combine with AND; the filter bar has no album control. Scan-added rows are checked by `photo_matches`, which rejects rows for filters needing the database (missing, duplicates, album) until the end-of-scan reload. A filter or album change resets the scroll; "Remove from album" needs no confirmation; the status bar shows the filtered count only |
+| Viewer | Zoom is relative to fit (up to 16x); zooming past fit loads the full-resolution image. The info panel is hidden by default (`I` key or Info button). Show in Explorer acts on the primary copy: `explorer /select` on Windows, `wslpath` plus `explorer.exe` on WSL, otherwise the containing folder opens. Untested on real Windows |
 
 ## 17. Risks
 
