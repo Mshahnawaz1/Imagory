@@ -1,62 +1,46 @@
-# Imagory V0 tasks
+# Imagory tasks
 
-Breakdown of PRD §7 into implementable steps. "Done" for V0 is the checklist in PRD §7.5.
-Tick each box when the task is implemented, tested, and committed.
+Scope and design are in `PRD.md`. A task is done only when it is implemented, tested, and
+committed. Completed work is listed at the end, one line per task.
 
-## 1. Project scaffolding
-- [x] `pyproject.toml` (Python 3.12, PySide6, Pillow, pillow-heif; dev: pytest, ruff, pyinstaller) and committed `uv.lock`
-- [x] ruff and pytest config in `pyproject.toml`
-- [x] `.gitignore`, MIT `LICENSE`, rename `Readme.md` to `README.md`
-- [x] `imagory/` package skeleton and `__main__.py` calling `multiprocessing.freeze_support()` first
+## Next: V1
 
-## 2. Paths and logging (`imagory/paths.py`, `imagory/logs.py`)
-- [x] Library folder resolution: `IMAGORY_LIBRARY`, `%LOCALAPPDATA%\Imagory`, `$XDG_DATA_HOME/imagory`
-- [x] Bundled-resource helper (`sys._MEIPASS`)
-- [x] Rotating log file in `<library>/logs/`
-- [x] Unit tests
+- [ ] §8.2 Missing files: moved-file detection by hash, a photo is missing only when all its files are, "Remove missing items" per source
+- [ ] §8.3 Takeout import: sidecar matching with all naming quirks and a matching report; read `photoTakenTime`, `geoData`, `title`; skip `Trash`
+- [ ] §8.4 Dates: wire `imagory/dates.py` into the scanner and db
+- [ ] §8.5 Duplicates: BLAKE2b hash in the worker pass, photo identity by hash, primary copy, thumbnails keyed by hash, V0 migration
+- [ ] §8.6 Grid integration:
+  - month counts in db.py
+  - a DB data source for the grid
+  - thumbnail provider
+  - replace `PhotoGridView` with `PhotoGrid`
+  - rerun the 100k bench on Windows
+- [ ] §8.6 Browsing: multi-select actions, viewer zoom/pan, info panel, Show in Explorer
+- [ ] §8.7 Search and filters: text search; date, source, folder, album, has-duplicates, missing
+- [ ] §8.8 Albums: tables, create/rename/delete, add/remove photos, album view
 
-## 3. Database (`imagory/db.py`)
-- [x] Connection setup: WAL, `foreign_keys=ON`, `synchronous=NORMAL`
-- [x] Migration framework on `PRAGMA user_version`, each step in a transaction, `.bak` copy before migrating an existing DB
-- [x] Migration 1: V1 core schema (`sources`, `files`, `photos`, `scan_runs`, `settings`) and indexes (PRD §9)
-- [x] Queries: source create/get/delete, file state for diff, apply batch (insert/update file + photo), mark missing, scan_runs, grid listing
-- [x] Unit tests: new DB at current version, pragmas, backup, source delete
+## Open from V0
 
-## 4. Walk and diff (`imagory/scanner.py`, pure functions)
-- [x] `walk_source`: `os.scandir`, no symlinks/junctions, skip `.`/`$`/`System Volume Information`/library folder, case-insensitive extensions, skipped-by-extension counts
-- [x] `diff`: new / changed / unchanged / disappeared (+ reappeared missing files)
-- [x] Unit tests for walk rules and diff
+- [ ] Verify the Windows 10/11 `.exe` and its size (PRD §7.5 item 7). Must be done on real Windows, not WSL
 
-## 5. Metadata and thumbnails (`imagory/metadata.py`, `imagory/thumbs.py`)
-- [x] Read dimensions, format, EXIF `DateTimeOriginal`, orientation; HEIC via pillow-heif
-- [x] Date fallback: EXIF, else mtime converted to local time; `date_source` `exif`/`mtime`
-- [x] Thumbnail: 320 px, JPEG q85, EXIF transpose, draft mode for JPEG, first GIF frame, `thumbs/ab/cd/<blake2b(relpath)>.jpg`
-- [x] Single-pass worker function returning a picklable result; errors returned, never raised
-- [x] Unit tests (date fallback, orientation, thumbnail path/size, corrupt file)
+## Completed
 
-## 6. Scan coordinator (`imagory/scanner.py`)
-- [x] `Scanner.run()`: walk, diff, process in `ProcessPoolExecutor` (CPU-1), apply in ~200-file transactions, mark missing, record `scan_runs`
-- [x] Progress callback and cooperative cancel (stop queueing, commit in-flight results)
-- [x] Integration tests for PRD §7.5 items 2–5 (rows, no-op rescan, 1 updated + 1 missing, cancel/resume, corrupt image, source unchanged)
+### V0
+- [x] Project scaffolding: `pyproject.toml`, `uv.lock`, ruff/pytest config, MIT licence, package skeleton
+- [x] Library folder resolution and rotating logs (`paths.py`, `logs.py`)
+- [x] Database: connection pragmas, migrations with backup, V1 core schema, queries (`db.py`)
+- [x] Walk and scan diff (`scanner.py`)
+- [x] Metadata, date fallback, and thumbnails (`metadata.py`, `thumbs.py`)
+- [x] Scan coordinator: worker pool, batched commits, progress, cancel and resume
+- [x] UI: main window, scan thread, thumbnail grid, viewer, reopen from the database
+- [x] Fake library generator, benchmark, and 100k results (`docs/v0-results.md`)
+- [x] PyInstaller spec and third-party licences (validated on Linux)
+- [x] README and PRD kept in sync
 
-## 7. UI (`imagory/ui/`)
-- [x] Main window: empty state with "Choose folder", toolbar (Rescan, Change folder), Help menu ("Open log folder", About with MIT licence)
-- [x] Scan `QThread` wrapping the coordinator, progress bar + Cancel, summary dialog
-- [x] Grid: `QListView` icon mode, model from DB (newest first, ties by path), lazy thumbnail loading via `QThreadPool`, size-limited cache, on-demand regeneration
-- [x] Viewer: fit to window, EXIF orientation, Left/Right/Esc, status line
-- [x] Change folder: confirm, delete source rows and thumbnails, scan new folder
-- [x] Later launches show grid from DB without scanning
-- [x] Offscreen smoke test
-
-## 8. Performance (PRD §7.5 item 6, §10)
-- [x] `scripts/make_fake_library.py`: 100,000 small images with varied EXIF dates and a share of exact duplicates (synthetic Takeout layout deferred to V1)
-- [x] `scripts/bench.py`: full scan, unchanged rescan, time-to-first-screen
-- [x] Run on 100k and record results in `docs/v0-results.md` (scroll smoothness by eye still pending on Windows)
-
-## 9. Packaging (PRD §7.5 item 7, §13)
-- [x] PyInstaller `--onefile` spec (`imagory.spec`), build instructions, `THIRD_PARTY_LICENSES.txt` (spec validated with a Linux build; frozen binary starts)
-- [ ] Windows 10/11 verification and .exe size: **must be done on real Windows** (cannot be verified from WSL)
-
-## 10. Docs
-- [x] README: offline/privacy promise, setup, run, test, build, SmartScreen note
-- [x] PRD sync for any decisions made during implementation
+### V1
+- [x] §8.4 date rules as pure functions: filename dates, priority, time zones, best date across copies (`dates.py`)
+- [x] §8.6 virtualized grid prototype with month headers, selection, and a 100k benchmark (`ui/photo_grid.py`)
+- [x] Synthetic Takeout export with all sidecar quirks and a ground-truth manifest (`make_fake_library.py --takeout`)
+- [x] PRD and README updated for the three items above
+- [x] §8.1 Sources: source type and detection, rename, relocate, remove, per-source thumbnails, multi-source scan, Add source and Sources dialogs, grid crash fix (`docs/issues.md` issue 1)
+  - deferred: recompute dates on type change (needs §8.3/§8.4 wiring); remove album memberships (needs §8.8)

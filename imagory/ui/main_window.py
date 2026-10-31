@@ -6,10 +6,12 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QPoint, Qt, QUrl
+from PySide6.QtCore import QModelIndex, QPoint, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -21,11 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from imagory import __version__, db, paths, thumbs
+from imagory import __version__, db, paths, sources, takeout
 from imagory.scanner import Progress, ScanSummary
 from imagory.ui.grid import PhotoGridModel, PhotoGridView, ThumbnailLoader
-from imagory.ui.grid_query import GridQueryThread
-from imagory.ui.scan_thread import ScanThread
+from imagory.ui.grid_query import GridQuery
+from imagory.ui.scan_thread import ScanThread, SourceScanResult
+from imagory.ui.sources_dialog import TYPE_NAMES, AddSourceDialog, SourcesDialog, default_label
 from imagory.ui.viewer import PhotoViewer
 
 log = logging.getLogger(__name__)
@@ -56,6 +59,22 @@ def summary_text(summary: ScanSummary) -> str:
     return "\n".join(lines)
 
 
+def results_text(results: list[SourceScanResult]) -> str:
+    """The scan summary of each source, headed by its label when there are several."""
+    parts = []
+    for result in results:
+        if result.summary is None:
+            body = f"Not scanned: {result.error}"
+            if result.error and result.error.startswith("Folder not found"):
+                body += "\nIf the drive letter changed or the folder moved, use Sources > Relocate."
+        else:
+            body = summary_text(result.summary)
+            if result.summary.status == "cancelled":
+                body += "\n(cancelled)"
+        parts.append(body if len(results) == 1 else f"{result.source.label}\n{body}")
+    return "\n\n".join(parts)
+
+
 class EmptyPage(QWidget):
     def __init__(self, on_choose, parent=None) -> None:
         super().__init__(parent)
@@ -64,13 +83,14 @@ class EmptyPage(QWidget):
         title = QLabel("<h2>Welcome to Imagory</h2>", self)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         text = QLabel(
-            "Choose a folder of photos to browse. Imagory only reads your photos: "
-            "it never changes, moves, or deletes them, and nothing leaves this computer.",
+            "Add a folder of photos, or an extracted Google Takeout export, to browse. "
+            "Imagory only reads your photos: it never changes, moves, or deletes them, "
+            "and nothing leaves this computer.",
             self,
         )
         text.setWordWrap(True)
         text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.button = QPushButton("Choose folder…", self)
+        self.button = QPushButton("Add a folder…", self)
         self.button.setDefault(True)
         self.button.clicked.connect(on_choose)
         layout.addWidget(title)
@@ -81,17 +101,25 @@ class EmptyPage(QWidget):
 
 
 class MainWindow(QMainWindow):
+    sources_changed = Signal()
+    scan_state_changed = Signal()
+
     def __init__(self, library_root: Path, conn: sqlite3.Connection) -> None:
         super().__init__()
         self.library_root = library_root
         self.db_file = paths.db_path(library_root)
         self.thumbs_root = paths.thumbs_dir(library_root)
         self.conn = conn
-        self.source: db.Source | None = db.get_source(conn)
+        self.sources: list[db.Source] = []
+        # Shared with the grid loader and the viewer, so it is only ever updated in place.
+        self.sources_by_id: dict[int, db.Source] = {}
+        self._load_sources()
         self.scan_thread: ScanThread | None = None
         self._grid_token = 0
-        self._grid_threads: set[GridQueryThread] = set()
+        self.grid_query = GridQuery(self.db_file, self)
+        self.grid_query.loaded.connect(self._on_rest_of_grid)
         self._anchor_id: int | None = None  # photo to keep in view across a grid reload
+        self._scan_prefix = ""  # names the source being scanned when there are several
         self._closing = False
 
         self.setWindowTitle("Imagory")
@@ -105,7 +133,7 @@ class MainWindow(QMainWindow):
         self.grid.open_requested.connect(self.open_viewer)
         self.viewer = PhotoViewer(self)
         self.viewer.closed.connect(self.close_viewer)
-        self.empty = EmptyPage(self.choose_folder, self)
+        self.empty = EmptyPage(self.add_source_interactive, self)
 
         self.pages = QStackedWidget(self)
         self.pages.addWidget(self.empty)
@@ -120,25 +148,31 @@ class MainWindow(QMainWindow):
     # --- construction -------------------------------------------------------------------
 
     def _build_actions(self) -> None:
-        self.rescan_action = QAction("Rescan", self)
+        self.add_action = QAction("Add source…", self)
+        self.add_action.setShortcut(QKeySequence.StandardKey.Open)
+        self.add_action.setStatusTip("Add a photo folder or an extracted Google Takeout export")
+        self.add_action.triggered.connect(self.add_source_interactive)
+        self.rescan_action = QAction("Rescan all", self)
         self.rescan_action.setShortcut(QKeySequence.StandardKey.Refresh)
-        self.rescan_action.setStatusTip("Look for new, changed, and missing photos")
+        self.rescan_action.setStatusTip("Look for new, changed, and missing photos in all sources")
         self.rescan_action.triggered.connect(self.rescan)
-        self.change_action = QAction("Change folder…", self)
-        self.change_action.setStatusTip("Browse a different folder instead")
-        self.change_action.triggered.connect(self.change_folder)
+        self.sources_action = QAction("Sources…", self)
+        self.sources_action.setStatusTip("Rename, rescan, relocate, or remove sources")
+        self.sources_action.triggered.connect(self.show_sources)
 
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("main-toolbar")
         toolbar.setMovable(False)
+        toolbar.addAction(self.add_action)
         toolbar.addAction(self.rescan_action)
-        toolbar.addAction(self.change_action)
+        toolbar.addAction(self.sources_action)
         self.addToolBar(toolbar)
         self.toolbar = toolbar
 
         file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction(self.add_action)
         file_menu.addAction(self.rescan_action)
-        file_menu.addAction(self.change_action)
+        file_menu.addAction(self.sources_action)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("E&xit")
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
@@ -170,34 +204,21 @@ class MainWindow(QMainWindow):
         """
         self._grid_token += 1
         self._anchor_id = self._current_anchor()
-        if self.source is None:
-            self.model.set_photos([], None)
+        if not self.sources:
+            self.model.set_photos([], self.sources_by_id)
             self.pages.setCurrentIndex(PAGE_EMPTY)
             self._update_actions()
             self.status_label.setText("")
             return
-        photos = db.grid_photos(self.conn, self.source.id, limit=FIRST_PAGE)
-        self.model.set_photos(photos, Path(self.source.root_path))
+        photos = db.grid_photos(self.conn, limit=FIRST_PAGE)
+        self.model.set_photos(photos, self.sources_by_id)
         self._restore_anchor()
         if len(photos) == FIRST_PAGE:
-            self._load_rest_of_grid(len(photos))
+            self.grid_query.start(len(photos), self._grid_token)
         if self.pages.currentIndex() != PAGE_VIEWER:
             self.pages.setCurrentIndex(PAGE_GRID)
-        self.setWindowTitle(f"Imagory - {self.source.root_path}")
         self._update_actions()
         self._show_photo_count()
-
-    def _load_rest_of_grid(self, offset: int) -> None:
-        assert self.source is not None
-        thread = GridQueryThread(self.db_file, self.source.id, offset, self._grid_token, self)
-        thread.loaded.connect(self._on_rest_of_grid)
-        thread.finished.connect(lambda: self._grid_thread_done(thread))
-        self._grid_threads.add(thread)
-        thread.start()
-
-    def _grid_thread_done(self, thread: GridQueryThread) -> None:
-        self._grid_threads.discard(thread)
-        thread.deleteLater()
 
     def _on_rest_of_grid(self, token: int, photos: list) -> None:
         if token != self._grid_token or self._closing:
@@ -239,16 +260,17 @@ class MainWindow(QMainWindow):
             self.model.insert_photos(photos)
 
     def _show_photo_count(self) -> None:
-        if self.source is not None and not self.scanning:
+        if self.sources and not self.scanning:
+            count = len(self.sources)
             self.status_label.setText(
-                f"{self.model.rowCount():,} photos in {self.source.root_path}"
+                f"{self.model.rowCount():,} photos in {count} source{'s' if count != 1 else ''}"
             )
 
     def open_viewer(self, row: int) -> None:
-        if self.source is None or not 0 <= row < len(self.model.photos):
+        if not 0 <= row < len(self.model.photos):
             return
         self.pages.setCurrentIndex(PAGE_VIEWER)
-        self.viewer.show_photo(self.model.photos, Path(self.source.root_path), row)
+        self.viewer.show_photo(self.model.photos, self.sources_by_id, row)
 
     def close_viewer(self, row: int) -> None:
         self.pages.setCurrentIndex(PAGE_GRID)
@@ -258,83 +280,199 @@ class MainWindow(QMainWindow):
             self.grid.scrollTo(index)
         self.grid.setFocus()
 
-    # --- folder and scanning ------------------------------------------------------------
+    # --- sources ------------------------------------------------------------------------
+
+    def _load_sources(self) -> None:
+        self.sources = db.list_sources(self.conn)
+        self.sources_by_id.clear()
+        self.sources_by_id.update((s.id, s) for s in self.sources)
+
+    def _sources_updated(self) -> None:
+        self._load_sources()
+        self.sources_changed.emit()
+
+    def source_stats(self) -> dict[int, db.SourceStats]:
+        return db.source_stats(self.conn)
+
+    def show_sources(self) -> None:
+        dialog = SourcesDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _pick_folder(self, title: str, start: str | None = None) -> Path | None:
+        chosen = QFileDialog.getExistingDirectory(self, title, start or str(Path.home()))
+        return Path(chosen).resolve() if chosen else None
+
+    def _check_folder(self, folder: Path, ignore_id: int | None = None) -> bool:
+        """Tell the user why ``folder`` cannot be used, or ask about a warning."""
+        check = sources.check_folder(folder, self.sources, self.library_root, ignore_id)
+        if check.error:
+            QMessageBox.warning(self, "Imagory", f"{folder}\n\n{check.error}")
+            return False
+        if check.warning:
+            answer = QMessageBox.question(
+                self,
+                "Imagory",
+                f"{folder}\n\n{check.warning}\n\nUse this folder anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            return answer == QMessageBox.StandardButton.Yes
+        return True
+
+    def add_source_interactive(self) -> None:
+        if self.scanning:
+            return
+        folder = self._pick_folder("Add a photo folder or Takeout export")
+        if folder is None or not self._check_folder(folder):
+            return
+        detection = takeout.detect_source_type(folder)
+        dialog = AddSourceDialog(folder, detection, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.add_source(folder, dialog.label, dialog.source_type, detection.type)
+        dialog.deleteLater()
+
+    def add_source(
+        self,
+        folder: Path,
+        label: str | None = None,
+        source_type: str | None = None,
+        detected_type: str | None = None,
+    ) -> db.Source:
+        """Create a source for ``folder`` and scan it. The type is detected if not given."""
+        if detected_type is None:
+            detected_type = takeout.detect_source_type(folder).type
+        source = sources.add_source(
+            self.conn,
+            self.thumbs_root,
+            folder,
+            label or default_label(folder),
+            source_type or detected_type,
+            detected_type,
+        )
+        self._sources_updated()
+        self.reload_grid()
+        self.start_scan([source])
+        return source
+
+    def rename_source_interactive(self, source: db.Source) -> None:
+        label, ok = QInputDialog.getText(self, "Rename source", "Label:", text=source.label)
+        if ok and label.strip():
+            self.rename_source(source.id, label.strip())
+
+    def rename_source(self, source_id: int, label: str) -> None:
+        db.rename_source(self.conn, source_id, label)
+        self._sources_updated()
+        if self.pages.currentIndex() == PAGE_VIEWER and self.viewer.photos:
+            self.viewer.rebind(self.viewer.photos, self.viewer.row)  # refresh the label
+
+    def change_type_interactive(self, source: db.Source) -> None:
+        names = [TYPE_NAMES[t] for t in db.SOURCE_TYPES]
+        chosen, ok = QInputDialog.getItem(
+            self,
+            "Change source type",
+            f"Type of “{source.label}”:",
+            names,
+            db.SOURCE_TYPES.index(source.type),
+            False,
+        )
+        if ok:
+            self.change_source_type(source.id, db.SOURCE_TYPES[names.index(chosen)])
+
+    def change_source_type(self, source_id: int, source_type: str) -> None:
+        # Dates do not depend on the type until Takeout dates exist (PRD §8.3, §8.4); the
+        # recompute for this source belongs here then.
+        db.set_source_type(self.conn, source_id, source_type)
+        self._sources_updated()
+
+    def relocate_source_interactive(self, source: db.Source) -> None:
+        if self.scanning:
+            return
+        parent = str(Path(source.root_path).parent)
+        folder = self._pick_folder(f"New location of “{source.label}”", parent)
+        if folder is None or not self._check_folder(folder, ignore_id=source.id):
+            return
+        found, checked = sources.relocation_matches(self.conn, source.id, folder)
+        if checked and not found:
+            answer = QMessageBox.question(
+                self,
+                "Relocate source",
+                f"None of the {checked} photos checked from “{source.label}” are in\n"
+                f"{folder}\n\nRelocate anyway? A rescan will then mark them missing.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.relocate_source(source.id, folder)
+
+    def relocate_source(self, source_id: int, folder: Path) -> None:
+        """Point the source at ``folder`` and rescan it, so its photos are found again."""
+        log.info("Relocating source %d to %s", source_id, folder)
+        db.relocate_source(self.conn, source_id, str(folder))
+        self._sources_updated()
+        self.reload_grid()
+        self.start_scan([self.sources_by_id[source_id]])
+
+    def remove_source_interactive(self, source: db.Source) -> None:
+        if self.scanning:
+            return
+        stats = self.source_stats().get(source.id, db.SourceStats())
+        answer = QMessageBox.question(
+            self,
+            "Remove source",
+            f"Remove “{source.label}” from Imagory?\n\n{source.root_path}\n\n"
+            f"Imagory will forget its {stats.photos + stats.missing:,} photos and delete their "
+            "thumbnails. Your photos on disk are not touched.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.remove_source(source.id)
+
+    def remove_source(self, source_id: int) -> None:
+        """Delete the source's rows and thumbnails. Only after the user confirms."""
+        assert not self.scanning
+        if self.pages.currentIndex() == PAGE_VIEWER:
+            self.close_viewer(-1)  # the photo showing may belong to this source
+        self.model.set_photos([], self.sources_by_id)
+        self.loader.wait()  # no thumbnail is written into the folder being removed
+        sources.remove_source(self.conn, self.thumbs_root, source_id)
+        self._sources_updated()
+        self.reload_grid()
+
+    # --- scanning -----------------------------------------------------------------------
 
     @property
     def scanning(self) -> bool:
         return self.scan_thread is not None
 
     def _update_actions(self) -> None:
-        self.rescan_action.setEnabled(self.source is not None and not self.scanning)
-        self.change_action.setEnabled(self.source is not None and not self.scanning)
-        self.empty.button.setEnabled(not self.scanning)
-
-    def _pick_folder(self) -> Path | None:
-        start = self.source.root_path if self.source else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Choose a photo folder", start)
-        return Path(chosen).resolve() if chosen else None
-
-    def choose_folder(self) -> None:
-        if self.scanning or self.source is not None:
-            return
-        folder = self._pick_folder()
-        if folder is not None:
-            self.set_folder(folder)
-
-    def set_folder(self, folder: Path) -> None:
-        """Create the source for ``folder`` and scan it (first launch)."""
-        self.source = db.create_source(self.conn, str(folder), folder.name or str(folder))
-        log.info("Source created for %s", folder)
-        self.reload_grid()
-        self.start_scan()
-
-    def change_folder(self) -> None:
-        if self.scanning or self.source is None:
-            return
-        folder = self._pick_folder()
-        if folder is None:
-            return
-        if Path(self.source.root_path) == folder:
-            self.rescan()
-            return
-        answer = QMessageBox.question(
-            self,
-            "Change folder",
-            f"Switch Imagory to:\n{folder}\n\n"
-            f"Imagory will forget everything it knows about\n{self.source.root_path}\n"
-            "and delete its thumbnails. Your photos on disk are not touched.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self.replace_folder(folder)
-
-    def replace_folder(self, folder: Path) -> None:
-        """Delete the current source's rows and thumbnails, then scan ``folder``."""
-        assert self.source is not None
-        log.info("Changing folder from %s to %s", self.source.root_path, folder)
-        self.model.set_photos([], None)
-        self.loader.wait()
-        db.delete_source(self.conn, self.source.id)
-        thumbs.clear_thumbs(self.thumbs_root)
-        self.source = None
-        self.set_folder(folder)
+        idle = not self.scanning
+        self.add_action.setEnabled(idle)
+        self.rescan_action.setEnabled(bool(self.sources) and idle)
+        self.sources_action.setEnabled(bool(self.sources))
+        self.empty.button.setEnabled(idle)
 
     def rescan(self) -> None:
-        if self.source is not None and not self.scanning:
-            self.start_scan()
+        self.rescan_sources(self.sources)
 
-    def start_scan(self) -> None:
-        assert self.source is not None and self.scan_thread is None
-        thread = ScanThread(self.db_file, self.source, self.thumbs_root, self.library_root, self)
+    def rescan_sources(self, to_scan: list[db.Source]) -> None:
+        if to_scan and not self.scanning:
+            self.start_scan(to_scan)
+
+    def start_scan(self, to_scan: list[db.Source]) -> None:
+        assert to_scan and self.scan_thread is None
+        thread = ScanThread(self.db_file, to_scan, self.thumbs_root, self.library_root, self)
+        thread.source_started.connect(self._on_source_started)
         thread.progressed.connect(self._on_progress)
         thread.added.connect(self._on_scan_added)
         thread.succeeded.connect(self._on_scan_succeeded)
-        thread.failed.connect(self._on_scan_failed)
         thread.finished.connect(self._on_scan_thread_finished)
         self.scan_thread = thread
+        self._scan_prefix = ""
         self._update_actions()
+        self.scan_state_changed.emit()
         self.progress.setRange(0, 0)
         self.progress.setVisible(True)
         self.cancel_button.setEnabled(True)
@@ -348,38 +486,44 @@ class MainWindow(QMainWindow):
             self.cancel_button.setEnabled(False)
             self.status_label.setText("Stopping after the current files…")
 
+    def _on_source_started(self, source: db.Source, position: int, total: int) -> None:
+        self._scan_prefix = f"{source.label} ({position} of {total}): " if total > 1 else ""
+
     def _on_progress(self, progress: Progress) -> None:
         if self.scan_thread is None or self.scan_thread.cancel_requested:
             return
         if progress.phase == "walking":
             self.progress.setRange(0, 0)
-            self.status_label.setText("Looking for photos…")
+            self.status_label.setText(f"{self._scan_prefix}Looking for photos…")
         elif progress.phase == "processing":
             self.progress.setRange(0, max(1, progress.to_process))
             self.progress.setValue(progress.processed)
             self.status_label.setText(
-                f"Processing {progress.processed:,} of {progress.to_process:,} new or changed "
-                f"files ({progress.found:,} found)"
+                f"{self._scan_prefix}Processing {progress.processed:,} of "
+                f"{progress.to_process:,} new or changed files ({progress.found:,} found)"
             )
 
-    def _on_scan_succeeded(self, summary: ScanSummary) -> None:
+    def _on_scan_succeeded(self, results: list[SourceScanResult]) -> None:
         if self._closing:
             return
+        self._sources_updated()  # last scan times
         self.reload_grid()
-        title = "Scan cancelled" if summary.status == "cancelled" else "Scan finished"
-        note = "\n\nRescan to pick up where it stopped." if summary.status == "cancelled" else ""
-        QMessageBox.information(self, title, summary_text(summary) + note)
-
-    def _on_scan_failed(self, message: str) -> None:
-        if self._closing:
+        if not results:  # cancelled before the first source started
+            QMessageBox.information(self, "Scan cancelled", "Nothing was scanned.")
             return
-        self.reload_grid()
-        QMessageBox.warning(
-            self,
-            "Scan failed",
-            f"The scan stopped because of an error:\n{message}\n\n"
-            "Details are in the log (Help > Open log folder).",
-        )
+        text = results_text(results)
+        if any(r.summary is None for r in results):
+            QMessageBox.warning(
+                self,
+                "Scan finished with problems",
+                text + "\n\nDetails are in the log (Help > Open log folder).",
+            )
+            return
+        cancelled = self.scan_thread is not None and self.scan_thread.cancel_requested
+        cancelled = cancelled or any(r.summary.status == "cancelled" for r in results)
+        title = "Scan cancelled" if cancelled else "Scan finished"
+        note = "\n\nRescan to pick up where it stopped." if cancelled else ""
+        QMessageBox.information(self, title, text + note)
 
     def _on_scan_thread_finished(self) -> None:
         if self.scan_thread is not None:
@@ -388,6 +532,7 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         self._update_actions()
+        self.scan_state_changed.emit()
         self._show_photo_count()
 
     # --- help ---------------------------------------------------------------------------
@@ -417,8 +562,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Stopping scan…")
             self.scan_thread.cancel()
             self.scan_thread.wait()  # in-flight results are committed before it exits
-        for thread in list(self._grid_threads):
-            thread.wait()
-        self.loader.reset(None)
+        self.grid_query.wait()
+        self.loader.reset({})
         self.loader.wait()
         super().closeEvent(event)

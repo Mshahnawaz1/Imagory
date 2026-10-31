@@ -1,6 +1,6 @@
 # Imagory: Product Requirements Document
 
-Version 1.2 · October 31, 2026 · Status: V0 implemented (Windows checks pending, section 7.5). V1 scope agreed. Remaining open items are listed in section 18.
+Version 1.2 · October 31, 2026 · Status: V0 implemented (Windows checks pending, section 7.5). V1 in progress: section 8.1 (sources) implemented. Remaining open items are listed in section 18.
 
 ## 1. Overview
 
@@ -389,6 +389,12 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Grid loading | The first 500 rows are queried directly (index-ordered, so the LIMIT stops early) and the rest load on a background read-only thread, to meet the 1-second first screen at 100,000 photos |
 | Grid during a scan | The scan coordinator reports the grid rows of each committed batch to the UI (a signal, no UI database access); the grid inserts them in sorted order. A 200-photo batch costs about 45 ms of UI time on a 100,000-photo grid |
 | Leaving the viewer | A visible Back button, because Esc alone was not discoverable (found testing the Windows .exe) |
+| Sources (V1) | Several sources in one library and one grid; one scan thread scans the chosen sources in turn, and a source whose folder is unavailable is reported while the others are still scanned |
+| Thumbnail layout (V1) | One folder per source (`thumbs/source-<id>/`), so removing a source deletes its thumbnails in one step; a cache written with another layout is cleared once on startup (tracked by the `thumbs_layout` setting). Keyed by content hash once section 8.5 lands |
+| Takeout detection | Folder names only, no file opens: a "Google Photos" folder (or localized name) at or directly under the root, or sidecar names next to at least half of a sample of images |
+| Adding a source | Refused if the folder is already a source or is inside the library folder; an overlapping folder is allowed after a warning |
+| Relocate check | A sample of 50 known relative paths is checked under the new folder, and the user confirms if few are found |
+| Remove source | Thumbnails are deleted first (they regenerate if removal stops halfway), then the rows; photos left with no files go too. Removing album memberships waits for section 8.8 |
 | Date logic (V1) | Pure functions in `imagory/dates.py`; "now" and the computer's time zone are injectable for tests |
 | Filename dates | Patterns match at the start of the name, case-insensitively; WhatsApp date-only names give midnight local time; invalid, pre-1990 and future filename dates fall through to the modified time |
 | Takeout JSON vs EXIF | Less than 24 h apart: EXIF wall-clock as local time plus JSON UTC, `date_source = takeout_json` (pending confirmation, section 18). 24 h or more: JSON wins, converted with the computer's zone. With JSON present, its UTC overrides EXIF `OffsetTimeOriginal` |

@@ -1,7 +1,7 @@
 # Imagory
 
-A free, open source photo browser for Windows. Point it at a folder of photos and get a
-fast, browsable library.
+A free, open source photo browser for Windows. Point it at your photo folders and
+extracted Google Takeout exports and get one fast, browsable library.
 
 > **Your photos stay yours.** Imagory is fully offline. It makes no network connections:
 > no telemetry, no accounts, no update checks. It only *reads* your photos. It never
@@ -9,22 +9,30 @@ fast, browsable library.
 > folders. Everything it stores (database, thumbnails, logs) stays on your computer in
 > its own library folder.
 
-**Status: V0.** Pick a folder, scan it in the background, browse thumbnails, view photos,
-and reopen the library later without rescanning. Duplicates, Google Takeout import,
-albums, and search are planned for V1 (see [PRD.md](PRD.md)).
+**Status: V1 in progress.** Add several photo folders as sources, scan them in the
+background, browse all their thumbnails in one grid, view photos, and reopen the library
+later without rescanning. Takeout dates, duplicates, albums, and search are still to come
+(see [PRD.md](PRD.md)).
 
 ## Using Imagory
 
-1. Start Imagory and click **Choose folder…**. Imagory scans the folder and its subfolders
-   in the background, and photos appear in the grid as they are processed. You can cancel
-   at any time, and **Rescan** picks up where it stopped.
+1. Start Imagory and click **Add a folder…** (or **Add source…** later). Give the source a
+   label, such as "Phone backup". Imagory detects whether the folder is a Google Takeout
+   export and shows why; you can change the type. It then scans the folder and its
+   subfolders in the background, and photos appear in the grid as they are processed. You
+   can cancel at any time, and **Rescan all** picks up where it stopped.
 2. Double-click a thumbnail (or press Enter) to open the viewer. **Left** and **Right** move
    between photos. **Back to photos** (or Esc, Backspace, or the mouse back button) returns
    to the grid.
-3. **Rescan** finds new, changed, and missing photos. Unchanged photos are skipped, so it is
-   quick. Missing photos are hidden, not forgotten. They come back if the file returns.
-4. **Change folder…** switches to a different folder. Imagory forgets the old folder's
-   library entries and thumbnails. The photos themselves are not touched.
+3. **Rescan all** finds new, changed, and missing photos in every source. Unchanged photos
+   are skipped, so it is quick. Missing photos are hidden, not forgotten. They come back if
+   the file returns. A source whose folder is not available (for example an unplugged
+   drive) is reported, and the other sources are still scanned.
+4. **Sources…** lists your sources with their photo and missing counts. From there you can
+   add, rescan, rename, or change the type of a source. **Relocate…** points a source at
+   its new folder when a drive letter changes or the folder moved, without rescanning
+   from scratch. **Remove…** makes Imagory forget a source and delete its thumbnails,
+   after you confirm. The photos themselves are never touched.
 
 Supported formats: JPEG, PNG, GIF (first frame), and HEIC/HEIF. Photos are sorted newest
 first by the date the photo was taken (EXIF), falling back to the file's modified time.

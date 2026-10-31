@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from imagory import thumbs
-from imagory.db import GridPhoto
+from imagory.db import GridPhoto, Source
 
 ICON_SIZE = 160
 CELL_PADDING = 8
@@ -51,7 +51,8 @@ def format_date(taken_at_local: str | None) -> str:
 
 
 def sorts_before(a: GridPhoto, b: GridPhoto) -> bool:
-    """Grid order, as in ``db.grid_photos``: newest first, no date last, then by path."""
+    """Grid order, as in ``db.grid_photos``: newest first, no date last, then by path,
+    then by source."""
     if a.taken_at_local != b.taken_at_local:
         if a.taken_at_local is None:
             return False
@@ -60,7 +61,10 @@ def sorts_before(a: GridPhoto, b: GridPhoto) -> bool:
         return a.taken_at_local > b.taken_at_local
     # NOCASE in SQLite folds ASCII only; lower() can differ for other letters, and the
     # full reload after the scan settles any difference.
-    return a.relative_path.lower() < b.relative_path.lower()
+    a_path, b_path = a.relative_path.lower(), b.relative_path.lower()
+    if a_path != b_path:
+        return a_path < b_path
+    return a.source_id < b.source_id
 
 
 def insertion_index(photos: list[GridPhoto], photo: GridPhoto) -> int:
@@ -125,7 +129,8 @@ class ThumbnailLoader(QObject):
         self.thumbs_root = thumbs_root
         self.device_pixel_ratio = device_pixel_ratio
         self.pixel_size = round(ICON_SIZE * device_pixel_ratio)
-        self.source_root: Path | None = None
+        # Per source id: its folder and its thumbnail folder.
+        self._folders: dict[int, tuple[Path, Path]] = {}
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(2)  # more threads only add GIL contention with the UI
         self._cache: OrderedDict[int, QPixmap] = OrderedDict()
@@ -135,14 +140,17 @@ class ThumbnailLoader(QObject):
         self._signals = _LoaderSignals()
         self._signals.loaded.connect(self._on_loaded)
 
-    def reset(self, source_root: Path | None) -> None:
-        """Forget everything, e.g. after a rescan changed thumbnails or the source changed."""
+    def reset(self, sources: dict[int, Source]) -> None:
+        """Forget everything, e.g. after a rescan changed thumbnails or sources changed."""
         self._generation += 1
         self._pool.clear()
         self._cache.clear()
         self._failed.clear()
         self._pending.clear()
-        self.source_root = source_root
+        self._folders = {
+            sid: (Path(s.root_path), thumbs.source_thumbs_dir(self.thumbs_root, sid))
+            for sid, s in sources.items()
+        }
 
     def drop_queued(self) -> None:
         """Discard queued (not yet started) loads, e.g. when the visible area scrolls away."""
@@ -154,19 +162,18 @@ class ThumbnailLoader(QObject):
         if pix is not None:
             self._cache.move_to_end(photo.photo_id)
             return pix
-        if (
-            photo.photo_id not in self._pending
-            and photo.photo_id not in self._failed
-            and self.source_root is not None
-        ):
+        if photo.photo_id not in self._pending and photo.photo_id not in self._failed:
+            folders = self._folders.get(photo.source_id)
+            if folders is None:
+                return None
             self._pending.add(photo.photo_id)
             self._pool.start(
                 _LoadTask(
                     self._signals,
                     self._generation,
                     photo.photo_id,
-                    self.source_root,
-                    self.thumbs_root,
+                    folders[0],
+                    folders[1],
                     photo.relative_path,
                     self.pixel_size,
                 )
@@ -213,9 +220,9 @@ class PhotoGridModel(QAbstractListModel):
         self._broken.fill(QColor(120, 120, 120, 80))
         loader.ready.connect(self._on_ready)
 
-    def set_photos(self, photos: list[GridPhoto], source_root: Path | None) -> None:
+    def set_photos(self, photos: list[GridPhoto], sources: dict[int, Source]) -> None:
         self.beginResetModel()
-        self.loader.reset(source_root)
+        self.loader.reset(sources)
         self.photos = photos
         self._row_index = None
         self.endResetModel()
