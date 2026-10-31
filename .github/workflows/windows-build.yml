@@ -21,10 +21,12 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      IMAGORY_LIBRARY: ${{ runner.temp }}\imagory-library
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+      - name: Use a scratch library, never a real one
+        shell: pwsh
+        run: echo "IMAGORY_LIBRARY=$env:RUNNER_TEMP\imagory-library" >> $env:GITHUB_ENV
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
