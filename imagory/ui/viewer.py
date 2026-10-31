@@ -144,14 +144,6 @@ class PhotoViewer(QWidget):
     def close_viewer(self) -> None:
         self.closed.emit(self._row)
 
-    def rows_inserted(self, first: int, count: int) -> None:
-        """The grid list grew (a scan is running): keep showing the same photo."""
-        if not self._photos or self._row < 0:
-            return
-        if first <= self._row:
-            self._row += count
-        self._update_status(self._photos[self._row])
-
     def show_photo(self, photos: list[GridPhoto], sources: dict[int, Source], row: int) -> None:
         self._photos = photos
         self._sources = sources

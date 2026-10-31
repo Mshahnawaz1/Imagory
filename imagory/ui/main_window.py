@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QPoint, Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
@@ -25,8 +25,8 @@ from PySide6.QtWidgets import (
 
 from imagory import __version__, db, paths, sources, takeout
 from imagory.scanner import Progress, ScanSummary
-from imagory.ui.grid import PhotoGridModel, PhotoGridView, ThumbnailLoader
-from imagory.ui.grid_query import GridQuery
+from imagory.ui.grid import PhotoDataSource, PhotoThumbnails
+from imagory.ui.photo_grid import PhotoGrid
 from imagory.ui.scan_thread import ScanThread, SourceScanResult
 from imagory.ui.sources_dialog import TYPE_NAMES, AddSourceDialog, SourcesDialog, default_label
 from imagory.ui.viewer import PhotoViewer
@@ -34,9 +34,6 @@ from imagory.ui.viewer import PhotoViewer
 log = logging.getLogger(__name__)
 
 PAGE_EMPTY, PAGE_GRID, PAGE_VIEWER = range(3)
-# Rows loaded synchronously at startup: more than a 4K screen of thumbnails holds.
-FIRST_PAGE = 500
-CELL_PROBE = 4  # pixels into the grid, to find the top-left cell
 
 
 def summary_text(summary: ScanSummary) -> str:
@@ -116,9 +113,6 @@ class MainWindow(QMainWindow):
         self.sources_by_id: dict[int, db.Source] = {}
         self._load_sources()
         self.scan_thread: ScanThread | None = None
-        self._grid_token = 0
-        self.grid_query = GridQuery(self.db_file, self)
-        self.grid_query.loaded.connect(self._on_rest_of_grid)
         self._anchor_id: int | None = None  # photo to keep in view across a grid reload
         self._scan_prefix = ""  # names the source being scanned when there are several
         self._closing = False
@@ -126,12 +120,20 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Imagory")
         self.resize(1200, 800)
 
-        self.loader = ThumbnailLoader(self.thumbs_root, self.devicePixelRatioF(), self)
-        self.model = PhotoGridModel(self.loader, self)
-        self.grid = PhotoGridView(self)
-        self.grid.setModel(self.model)
-        self.model.rowsInserted.connect(self._on_rows_inserted)
-        self.grid.open_requested.connect(self.open_viewer)
+        # The grid reads the database through these two; it never touches it itself.
+        self.grid_source = PhotoDataSource(conn, self.db_file, parent=self)
+        self.grid_source.completed.connect(self._on_rest_of_grid)
+        self.thumbnails = PhotoThumbnails(
+            self.thumbs_root,
+            self.sources_by_id,
+            device_pixel_ratio=self.devicePixelRatioF(),
+            parent=self,
+        )
+        self.grid = PhotoGrid(self)
+        self.grid.set_provider(self.thumbnails)
+        self.grid.set_data_source(self.grid_source)
+        self.grid.activated.connect(self.open_viewer)
+        self.grid.selection_changed.connect(self._show_photo_count)
         self.viewer = PhotoViewer(self)
         self.viewer.closed.connect(self.close_viewer)
         self.empty = EmptyPage(self.add_source_interactive, self)
@@ -198,33 +200,44 @@ class MainWindow(QMainWindow):
 
     # --- grid ---------------------------------------------------------------------------
 
+    @property
+    def photos(self) -> list[db.GridPhoto]:
+        """The grid's loaded photos, in grid order."""
+        return self.grid_source.photos
+
     def reload_grid(self) -> None:
         """Show the library straight from the database. Never starts a scan.
 
         The first screen is queried directly; the rest loads on a background thread.
+        The open photo, or the photo at the top left of the grid, stays in view.
         """
-        self._grid_token += 1
         self._anchor_id = self._current_anchor()
+        scroll_y = self.grid.scroll_y()
         if not self.sources:
-            self.model.set_photos([], self.sources_by_id)
+            self.grid_source.clear()
+            self.grid.set_data_source(self.grid_source)
             self.pages.setCurrentIndex(PAGE_EMPTY)
             self._update_actions()
             self.status_label.setText("")
             return
-        photos = db.grid_photos(self.conn, limit=FIRST_PAGE)
-        self.model.set_photos(photos, self.sources_by_id)
-        self._restore_anchor()
-        if len(photos) == FIRST_PAGE:
-            self.grid_query.start(len(photos), self._grid_token)
+        self.grid_source.load()
+        self.grid.set_data_source(self.grid_source)
+        if not self._restore_anchor():
+            # Until the anchor's row arrives, stay where the grid was rather than jump up.
+            self.grid.verticalScrollBar().setValue(scroll_y)
+        if self.grid_source.complete:
+            self._anchor_id = None  # everything is loaded: a photo not found is gone
+        self._update_empty_text()
         if self.pages.currentIndex() != PAGE_VIEWER:
             self.pages.setCurrentIndex(PAGE_GRID)
         self._update_actions()
         self._show_photo_count()
 
-    def _on_rest_of_grid(self, token: int, photos: list) -> None:
-        if token != self._grid_token or self._closing:
-            return  # the grid was reloaded in the meantime
-        self.model.append_photos(photos)
+    def _on_rest_of_grid(self, positions: list[int]) -> None:
+        if self._closing:
+            return
+        self._rebind_viewer(positions)
+        self.grid.items_inserted(positions)  # the counts may have changed too
         self._restore_anchor()
         self._anchor_id = None  # the whole grid is loaded: a photo not found is gone
         self._show_photo_count()
@@ -233,52 +246,75 @@ class MainWindow(QMainWindow):
         """The open photo, or the photo at the top left of the grid."""
         if self.pages.currentIndex() == PAGE_VIEWER:
             return self.viewer.current_photo_id()
-        if self.pages.currentIndex() != PAGE_GRID or self.model.rowCount() == 0:
-            return None
-        index = self.grid.indexAt(QPoint(CELL_PROBE, CELL_PROBE))
-        if not index.isValid() or index.row() == 0:
+        if self.pages.currentIndex() != PAGE_GRID or self.grid.scroll_y() == 0:
             return None  # at the top already: stay there
-        return self.model.photos[index.row()].photo_id
+        first, end = self.grid.visible_range()
+        photo = self.grid_source.item(first) if first < end else None
+        return photo.photo_id if photo is not None else None
 
-    def _restore_anchor(self) -> None:
+    def _restore_anchor(self) -> bool:
+        """Bring the anchor photo back into view; False while it is not loaded yet."""
         if self._anchor_id is None:
-            return
-        row = self.model.row_of(self._anchor_id)
-        if row is None:
-            return  # not loaded yet (or gone)
+            return True
+        index = self.grid_source.index_of(self._anchor_id)
+        if index is None:
+            return False  # not loaded yet (or gone)
         self._anchor_id = None
         if self.pages.currentIndex() == PAGE_VIEWER:
-            self.viewer.rebind(self.model.photos, row)
+            self.viewer.rebind(self.photos, index)
+            self.grid.set_current_index(index)
         else:
-            self.grid.scrollTo(self.model.index(row), PhotoGridView.ScrollHint.PositionAtTop)
+            self.grid.scroll_to(index, at_top=True)
+        return True
 
-    def _on_rows_inserted(self, parent: QModelIndex, first: int, last: int) -> None:
-        if self.pages.currentIndex() == PAGE_VIEWER and self.viewer.photos is self.model.photos:
-            self.viewer.rows_inserted(first, last - first + 1)
+    def _rebind_viewer(self, positions: list[int] | None = None) -> None:
+        """Keep the viewer on its photo after photos were inserted at ``positions``
+        (ascending indexes after the insertion) or appended."""
+        if self.pages.currentIndex() != PAGE_VIEWER or self.viewer.photos is not self.photos:
+            return
+        row = self.viewer.row
+        if row < 0:
+            return
+        for position in positions or ():
+            if position <= row:
+                row += 1
+        self.viewer.rebind(self.photos, row)  # also refreshes "n of total"
 
     def _on_scan_added(self, photos: list) -> None:
-        if not self._closing:
-            self.model.insert_photos(photos)
+        if self._closing:
+            return
+        positions = self.grid_source.insert(photos)
+        self.grid.items_inserted(positions)
+        if positions:
+            self._rebind_viewer(positions)
+
+    def _update_empty_text(self) -> None:
+        if self.scanning:
+            text = "Looking for photos…"
+        else:
+            text = "No photos to show. Add photos to your folders, then use Rescan all."
+        self.grid.set_empty_text(text)
 
     def _show_photo_count(self) -> None:
         if self.sources and not self.scanning:
             count = len(self.sources)
-            self.status_label.setText(
-                f"{self.model.rowCount():,} photos in {count} source{'s' if count != 1 else ''}"
+            text = (
+                f"{self.grid_source.count():,} photos in {count} source{'s' if count != 1 else ''}"
             )
+            selected = self.grid.selected_count()
+            if selected:
+                text += f"  ·  {selected:,} selected"
+            self.status_label.setText(text)
 
-    def open_viewer(self, row: int) -> None:
-        if not 0 <= row < len(self.model.photos):
-            return
+    def open_viewer(self, index: int) -> None:
+        if not 0 <= index < len(self.photos):
+            return  # not loaded yet
         self.pages.setCurrentIndex(PAGE_VIEWER)
-        self.viewer.show_photo(self.model.photos, self.sources_by_id, row)
+        self.viewer.show_photo(self.photos, self.sources_by_id, index)
 
-    def close_viewer(self, row: int) -> None:
+    def close_viewer(self, index: int) -> None:
         self.pages.setCurrentIndex(PAGE_GRID)
-        if 0 <= row < self.model.rowCount():
-            index = self.model.index(row)
-            self.grid.setCurrentIndex(index)
-            self.grid.scrollTo(index)
+        self.grid.set_current_index(index)
         self.grid.setFocus()
 
     # --- sources ------------------------------------------------------------------------
@@ -436,8 +472,9 @@ class MainWindow(QMainWindow):
         assert not self.scanning
         if self.pages.currentIndex() == PAGE_VIEWER:
             self.close_viewer(-1)  # the photo showing may belong to this source
-        self.model.set_photos([], self.sources_by_id)
-        self.loader.wait()  # no thumbnail is written into the folder being removed
+        self.grid_source.clear()
+        self.grid.set_data_source(self.grid_source)  # also drops queued thumbnail loads
+        self.thumbnails.wait()  # no thumbnail is written into the folder being removed
         sources.remove_source(self.conn, self.thumbs_root, source_id)
         self._sources_updated()
         self.reload_grid()
@@ -488,6 +525,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self.cancel_button.setVisible(True)
         self.status_label.setText("Looking for photos…")
+        self._update_empty_text()
         thread.start()
 
     def cancel_scan(self) -> None:
@@ -543,6 +581,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setVisible(False)
         self._update_actions()
         self.scan_state_changed.emit()
+        self._update_empty_text()
         self._show_photo_count()
 
     # --- help ---------------------------------------------------------------------------
@@ -572,7 +611,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Stopping scan…")
             self.scan_thread.cancel()
             self.scan_thread.wait()  # in-flight results are committed before it exits
-        self.grid_query.wait()
-        self.loader.reset({})
-        self.loader.wait()
+        self.grid_source.wait()
+        self.thumbnails.reset()
+        self.thumbnails.wait()
         super().closeEvent(event)

@@ -1,14 +1,15 @@
-"""Custom virtualized photo grid with month headers (PRD §8.6), V1 prototype.
+"""Custom virtualized photo grid with month headers (PRD §8.6).
 
 ``PhotoGrid`` paints only the headers and cells inside the viewport and asks for
 thumbnails of visible items only. It knows nothing about the database: items come from a
-``GridDataSource`` and pixmaps from a ``ThumbnailProvider``, so a database-backed source
-and the cached-thumbnail loader can plug in later without changing the widget.
+``GridDataSource`` and pixmaps from a ``ThumbnailProvider``. The database-backed ones the
+app uses are in ``grid.py``.
 """
 
 from __future__ import annotations
 
 import contextlib
+from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Sequence
 from typing import Protocol
@@ -155,6 +156,13 @@ class PooledThumbnailProvider(ThumbnailProvider):
         self._pool.clear()
         self._pending.clear()
 
+    def cached(self, key: Hashable) -> QPixmap | None:
+        """The cached pixmap for ``key``, without loading it or refreshing its age."""
+        return self._cache.get(key)
+
+    def cached_count(self) -> int:
+        return len(self._cache)
+
     def reset(self) -> None:
         self._generation += 1
         self._pool.clear()
@@ -223,6 +231,7 @@ class PhotoGrid(QAbstractScrollArea):
         self._header_font.setBold(True)
         self._header_font.setPointSizeF(self._header_font.pointSizeF() * 1.25)
         self._placeholder = QColor(128, 128, 128, 40)
+        self._empty_text = ""
         # Always on, so showing or hiding the bar never changes the width and reflows.
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -270,8 +279,56 @@ class PhotoGrid(QAbstractScrollArea):
         self.viewport().update()
         self.selection_changed.emit()
 
+    def items_inserted(self, positions: Sequence[int]) -> None:
+        """Items were inserted at ``positions`` (ascending indexes after the insertion).
+
+        Re-reads the counts and keeps the selection, the current item, and the item at
+        the top of the viewport (unless scrolled to the very top, which stays there).
+        With no positions, only the counts changed: indexes stay where they were.
+        """
+        shifted = [q - j for j, q in enumerate(positions)]  # old index each goes before
+
+        def remap(old: int) -> int:
+            return old + bisect_right(shifted, old) if old >= 0 else old
+
+        top_y = self.scroll_y()
+        top_item, offset = -1, 0
+        if top_y > 0 and self.count():
+            top_item = self.grid_layout.visible(top_y, top_y + 1).first_item
+            if top_item < self.count():
+                offset = top_y - self.grid_layout.item_rect(top_item).y
+            else:
+                top_item = -1
+        old = self._selected
+        selected = bytearray()
+        prev = 0
+        for s in shifted:
+            selected += old[prev:s]
+            selected.append(0)
+            prev = s
+        selected += old[prev:]
+        current, anchor = remap(self._current), remap(self._anchor)
+        self._build_layout()
+        n = self.count()
+        self._selected = selected[:n] + bytearray(max(0, n - len(selected)))
+        self._anchor = anchor if anchor < n else -1
+        self._set_current(current if current < n else -1)
+        if top_item >= 0:
+            top_item = min(remap(top_item), n - 1)
+            if top_item >= 0:
+                y = self.grid_layout.item_rect(top_item).y + offset
+                self.verticalScrollBar().setValue(y)
+        self.viewport().update()
+        if self._selected != old:
+            self.selection_changed.emit()
+
     def count(self) -> int:
         return self.grid_layout.count
+
+    def set_empty_text(self, text: str) -> None:
+        """Shown in the middle of the grid while it has no items."""
+        self._empty_text = text
+        self.viewport().update()
 
     def _build_layout(self) -> None:
         counts = self._source.month_counts() if self._source is not None else []
@@ -308,15 +365,16 @@ class PhotoGrid(QAbstractScrollArea):
     def visual_rect(self, index: int) -> QRect:
         return _qrect(self.grid_layout.item_rect(index), self.scroll_y())
 
-    def scroll_to(self, index: int) -> None:
-        """Scroll the least amount that makes ``index`` fully visible."""
+    def scroll_to(self, index: int, at_top: bool = False) -> None:
+        """Scroll the least amount that makes ``index`` fully visible, or put its row at
+        the top of the viewport (with its month header if it is in the first row)."""
         r = self.grid_layout.item_rect(index)
         bar = self.verticalScrollBar()
         top, height = bar.value(), self.viewport().height()
         section = self.grid_layout.section_of(index)
         first_row = r.y == self.grid_layout.section_top(section) + self.header_height
         want_top = self.grid_layout.section_top(section) if first_row else r.y
-        if want_top < top:
+        if at_top or want_top < top:
             bar.setValue(want_top)
         elif r.y + r.height > top + height:
             bar.setValue(r.y + r.height - height + self.spacing)
@@ -344,6 +402,9 @@ class PhotoGrid(QAbstractScrollArea):
         bottom = self.scroll_y() + clip.bottom() + 1
         dy = self.scroll_y()
         layout = self.grid_layout
+        if not layout.count and self._empty_text:
+            painter.setPen(palette.color(QPalette.ColorRole.PlaceholderText))
+            painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter, self._empty_text)
 
         painter.setFont(self._header_font)
         painter.setPen(palette.color(QPalette.ColorRole.Text))
@@ -394,6 +455,15 @@ class PhotoGrid(QAbstractScrollArea):
 
     def current_index(self) -> int:
         return self._current
+
+    def set_current_index(self, index: int) -> None:
+        """Make ``index`` current and the only selected item, unless it already is
+        current (then the selection is kept), and scroll it into view."""
+        if not 0 <= index < self.count():
+            return
+        if index != self._current:
+            self.click(index, Qt.KeyboardModifier.NoModifier)
+        self.scroll_to(index)
 
     def is_selected(self, index: int) -> bool:
         return bool(self._selected[index])

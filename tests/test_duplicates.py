@@ -449,7 +449,7 @@ def test_remove_missing_from_sources_dialog_asks_first(qtbot, tmp_path, monkeypa
     dialog.remove_missing_button.click()
     assert count(conn, "files") == 1 and count(conn, "photos") == 1
     assert not dialog.remove_missing_button.isEnabled()  # nothing missing any more
-    assert [p.relative_path for p in window.model.photos] == ["b.jpg"]
+    assert [p.relative_path for p in window.photos] == ["b.jpg"]
     assert snapshot(src) == before
     dialog.close()
     window.close()

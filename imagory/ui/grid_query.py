@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
@@ -17,21 +19,24 @@ class _QuerySignals(QObject):
     loaded = Signal(int, list)  # token, list[GridPhoto]
 
 
-class _QueryTask(QRunnable):
-    """Reads grid rows after ``offset`` with its own connection. Read-only."""
+Fetch = Callable[[sqlite3.Connection], list]
 
-    def __init__(self, signals: _QuerySignals, db_file: Path, offset: int, token: int):
+
+class _QueryTask(QRunnable):
+    """Runs ``fetch`` with its own connection. Read-only."""
+
+    def __init__(self, signals: _QuerySignals, db_file: Path, fetch: Fetch, token: int):
         super().__init__()
         self.signals = signals
         self.db_file = db_file
-        self.offset = offset
+        self.fetch = fetch
         self.token = token
 
     def run(self) -> None:
         try:
             conn = db.connect(self.db_file)
             try:
-                photos = db.grid_photos(conn, offset=self.offset)
+                photos = self.fetch(conn)
             finally:
                 conn.close()
         except Exception:
@@ -60,9 +65,17 @@ class GridQuery(QObject):
         self._signals = _QuerySignals()
         self._signals.loaded.connect(self.loaded)
 
-    def start(self, offset: int, token: int) -> None:
+    def start(self, fetch: Fetch, token: int) -> None:
+        """Run ``fetch(conn)`` on the pool thread; ``loaded`` reports its rows with ``token``.
+
+        ``fetch`` gets a fresh connection of its own and must only read.
+        """
         self._pool.clear()  # a queued query for an older reload is no longer needed
-        self._pool.start(_QueryTask(self._signals, self._db_file, offset, token))
+        self._pool.start(_QueryTask(self._signals, self._db_file, fetch, token))
+
+    def cancel(self) -> None:
+        """Drop a query that has not started yet."""
+        self._pool.clear()
 
     def wait(self) -> None:
         self._pool.waitForDone()

@@ -1,7 +1,8 @@
-"""Measure V0 performance against a (fake) library (PRD §7.5 item 6).
+"""Measure performance against a (fake) library (PRD §7.5 item 6, §10).
 
 Runs a full scan and an unchanged rescan with a fresh library, then opens the main window
-offscreen to time the first screen of thumbnails and the cost of scrolling.
+offscreen to time the month counts, the first screen of thumbnails, scrolling the
+virtualized grid, and inserting a scan batch, with the real database and thumbnail cache.
 
 Usage:
     IMAGORY_LIBRARY=.bench-library uv run python scripts/bench.py SOURCE_DIR [--skip-scan]
@@ -52,6 +53,7 @@ def wait_until(condition, timeout_ms: int = 30_000) -> None:
 
 
 def bench_ui(root: Path) -> None:
+    """Time the grid against the real database and thumbnail cache (PRD §10)."""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     t0 = time.perf_counter()
     from PySide6.QtWidgets import QApplication
@@ -60,36 +62,34 @@ def bench_ui(root: Path) -> None:
 
     app = QApplication.instance() or QApplication([])
     print(f"Qt and UI imports: {time.perf_counter() - t0:.3f}s")
-    started = time.perf_counter()
+
     conn = db.open_database(paths.db_path(root))
+    timings = []
+    for _ in range(5):
+        t = time.perf_counter()
+        db.month_counts(conn)
+        timings.append(time.perf_counter() - t)
+    print(f"db.month_counts: median {statistics.median(timings) * 1000:.1f} ms")
+
+    started = time.perf_counter()
     window = MainWindow(root, conn)
     window.resize(1280, 800)
     window.show()
     app.processEvents()
-    model_ready = time.perf_counter() - started
-
-    def visible_rows() -> list[int]:
-        view = window.grid
-        rows = []
-        for row in range(window.model.rowCount()):
-            rect = view.visualRect(window.model.index(row))
-            if rect.top() > view.viewport().height():
-                break
-            if rect.intersects(view.viewport().rect()):
-                rows.append(row)
-        return rows
-
-    first_rows = visible_rows()
-    photos = window.model.photos
-    wait_until(lambda: all(window.loader._cache.get(photos[r].photo_id) for r in first_rows))
+    grid = window.grid
+    layout_ready = time.perf_counter() - started
+    first, end = grid.visible_range()
+    photos = window.photos
+    wait_until(lambda: all(window.thumbnails.cached(p.photo_id) for p in photos[first:end]))
     first_screen = time.perf_counter() - started
-    print(f"Model loaded ({len(photos):,} photos) in {model_ready:.3f}s")
-    print(f"First screen ({len(first_rows)} thumbnails) visible in {first_screen:.3f}s")
-
-    total = conn.execute("SELECT COUNT(*) FROM files WHERE status = 'ok'").fetchone()[0]
-    wait_until(lambda: window.model.rowCount() >= total, timeout_ms=120_000)
     print(
-        f"Whole grid ({window.model.rowCount():,} photos) loaded in "
+        f"Grid layout ({grid.count():,} photos, {len(grid.grid_layout.sections)} months, "
+        f"{len(photos):,} rows loaded) in {layout_ready:.3f}s"
+    )
+    print(f"First screen ({end - first} thumbnails) visible in {first_screen:.3f}s")
+    wait_until(lambda: window.grid_source.complete, timeout_ms=120_000)
+    print(
+        f"Whole grid ({len(window.photos):,} rows) loaded in "
         f"{time.perf_counter() - started:.3f}s (in the background)"
     )
 
@@ -97,18 +97,20 @@ def bench_ui(root: Path) -> None:
     # scrolling only repaints the newly exposed strip. Thumbnail loads run concurrently.
     # Offscreen Qt does not paint on its own, so smoothness must still be judged by eye on
     # a real display. 16 ms per frame is 60 fps.
-    bar = window.grid.verticalScrollBar()
-    step = window.grid.gridSize().height()
+    bar = grid.verticalScrollBar()
+    step = grid.cell_size + grid.spacing
     patterns = (
         ("wheel (1/3 row per frame)", lambda i: i * step // 3, 300),
+        ("wheel again (thumbnails in memory)", lambda i: i * step // 3, 300),
         ("jumps (7 rows per frame)", lambda i: (i * step * 7) % max(1, bar.maximum()), 100),
+        ("drag (1/50 of the library per frame)", lambda i: i * bar.maximum() // 50, 50),
     )
     for label, position, frames_count in patterns:
         frames = []
         for i in range(frames_count):
             t0 = time.perf_counter()
             bar.setValue(position(i))
-            window.grid.viewport().repaint()
+            grid.viewport().repaint()
             app.processEvents()
             frames.append((time.perf_counter() - t0) * 1000)
         frames.sort()
@@ -116,6 +118,31 @@ def bench_ui(root: Path) -> None:
             f"Scroll {label}: median {statistics.median(frames):.1f} ms, "
             f"p95 {frames[int(len(frames) * 0.95)]:.1f} ms, max {frames[-1]:.1f} ms"
         )
+    # Then the thumbnails of the last position, as the user would wait for them.
+    t0 = time.perf_counter()
+    first, end = grid.visible_range()
+    wait_until(lambda: all(window.thumbnails.cached(p.photo_id) for p in photos[first:end]))
+    print(f"Thumbnails after a jump ({end - first}) ready in {time.perf_counter() - t0:.3f}s")
+
+    # A scan batch: 200 photos arriving in sorted order on the full grid.
+    import random
+
+    batch = random.Random(1).sample(window.photos, 200)
+    held_back = {p.photo_id for p in batch}
+    everything = window.grid_source.rows_query
+    window.grid_source.rows_query = lambda c, limit, offset: [
+        p for p in everything(c, limit, offset) if p.photo_id not in held_back
+    ]
+    window.grid_source.first_page = 10**9  # all at once, so the timing below is alone
+    window.reload_grid()
+    bar.setValue(bar.maximum() // 2)
+    t0 = time.perf_counter()
+    window._on_scan_added(batch)
+    grid.viewport().repaint()
+    print(
+        f"Scan batch of 200 inserted into {len(window.photos) - 200:,} rows: "
+        f"{(time.perf_counter() - t0) * 1000:.1f} ms"
+    )
     window.close()
     conn.close()
 
@@ -124,6 +151,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--skip-scan", action="store_true", help="only run the UI timings")
+    parser.add_argument("--skip-ui", action="store_true", help="only run the scans")
     args = parser.parse_args()
     if not os.environ.get(paths.LIBRARY_ENV):
         sys.exit("Set IMAGORY_LIBRARY to a scratch folder first.")
@@ -131,7 +159,7 @@ def main() -> None:
 
     if not args.skip_scan:
         conn = db.open_database(paths.db_path(root))
-        if db.get_source(conn) is not None:
+        if db.list_sources(conn):
             sys.exit(f"{root} already has a source; use a fresh IMAGORY_LIBRARY.")
         source = db.create_source(conn, str(args.source.resolve()), args.source.name)
         print("Full scan…")
@@ -144,7 +172,8 @@ def main() -> None:
             f"added {c.added}, updated {c.updated}, errors {c.errors}"
         )
         conn.close()
-    bench_ui(root)
+    if not args.skip_ui:
+        bench_ui(root)
 
 
 if __name__ == "__main__":

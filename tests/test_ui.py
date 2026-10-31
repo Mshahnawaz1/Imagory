@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from imagory import db, paths, thumbs  # noqa: E402
+from imagory.ui import grid  # noqa: E402
 from imagory.ui import main_window as mw  # noqa: E402
 from tests.imaging import make_image  # noqa: E402
 
@@ -56,14 +57,14 @@ def test_first_launch_scan_browse_and_reopen(qtbot, photos, no_dialogs):
     assert no_dialogs and no_dialogs[-1][0] == "Scan finished"
     assert "Added: 3" in no_dialogs[-1][1]
     assert window.pages.currentIndex() == mw.PAGE_GRID
-    names = [p.relative_path for p in window.model.photos]
+    names = [p.relative_path for p in window.photos]
     assert names == ["new.jpg", "mid.png", "old.jpg"]
 
     # Thumbnails load lazily through the thread pool.
-    qtbot.waitUntil(lambda: all(window.loader._cache.get(p.photo_id) for p in window.model.photos))
+    qtbot.waitUntil(lambda: all(window.thumbnails.cached(p.photo_id) for p in window.photos))
 
     # Viewer: Enter opens, Right moves, Esc closes back to the same photo.
-    window.grid.setCurrentIndex(window.model.index(0))
+    window.grid.set_current_index(0)
     qtbot.keyClick(window.grid, Qt.Key.Key_Return)
     assert window.pages.currentIndex() == mw.PAGE_VIEWER
     qtbot.waitUntil(lambda: not window.viewer.canvas._image.isNull())
@@ -74,7 +75,7 @@ def test_first_launch_scan_browse_and_reopen(qtbot, photos, no_dialogs):
     assert "mtime" in window.viewer.status.text()
     qtbot.keyClick(window.viewer, Qt.Key.Key_Escape)
     assert window.pages.currentIndex() == mw.PAGE_GRID
-    assert window.grid.currentIndex().row() == 1
+    assert window.grid.current_index() == 1
     window.close()
     conn.close()
 
@@ -82,7 +83,7 @@ def test_first_launch_scan_browse_and_reopen(qtbot, photos, no_dialogs):
     window, conn = open_window(qtbot)
     assert not window.scanning
     assert window.pages.currentIndex() == mw.PAGE_GRID
-    assert len(window.model.photos) == 3
+    assert len(window.photos) == 3
     window.close()
     conn.close()
 
@@ -96,9 +97,9 @@ def test_rescan_and_missing_thumbnail_regenerates(qtbot, photos, no_dialogs):
     window.rescan()
     wait_scan(qtbot, window)
     assert "Missing: 1" in no_dialogs[-1][1]
-    assert len(window.model.photos) == 2
-    qtbot.waitUntil(lambda: all(window.loader._cache.get(p.photo_id) for p in window.model.photos))
-    for p in window.model.photos:
+    assert len(window.photos) == 2
+    qtbot.waitUntil(lambda: all(window.thumbnails.cached(p.photo_id) for p in window.photos))
+    for p in window.photos:
         assert thumbs.thumb_path(window.thumbs_root, p.content_hash).exists()
     window.close()
     conn.close()
@@ -113,7 +114,7 @@ def test_two_sources_remove_one(qtbot, photos, tmp_path, no_dialogs):
     second = window.add_source(other, "Camera")
     wait_scan(qtbot, window)
     assert [s.label for s in window.sources] == ["Phone", "Camera"]
-    names = [p.relative_path for p in window.model.photos]
+    names = [p.relative_path for p in window.photos]
     assert names == ["new.jpg", "mid.png", "x.jpg", "old.jpg"]
     assert "4 photos in 2 sources" in window.status_label.text()
 
@@ -130,7 +131,7 @@ def test_two_sources_remove_one(qtbot, photos, tmp_path, no_dialogs):
 
     window.remove_source(second.id)
     assert window.pages.currentIndex() == mw.PAGE_GRID
-    assert [p.relative_path for p in window.model.photos] == ["new.jpg", "mid.png", "old.jpg"]
+    assert [p.relative_path for p in window.photos] == ["new.jpg", "mid.png", "old.jpg"]
     assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
     assert (other / "x.jpg").exists()  # files on disk are never touched
     window.remove_source(window.sources[0].id)
@@ -157,7 +158,7 @@ def test_unavailable_source_is_reported_and_others_scan(qtbot, photos, tmp_path,
     assert title == "Scan finished with problems"
     assert "USB\nNot scanned: Folder not found" in text and "Relocate" in text
     assert "Phone\nFound: 4" in text
-    assert len(window.model.photos) == 5  # nothing was marked missing
+    assert len(window.photos) == 5  # nothing was marked missing
 
     usb = next(s for s in window.sources if s.label == "USB")
     window.relocate_source(usb.id, moved)
@@ -241,16 +242,17 @@ def test_summary_text():
 
 
 def test_large_grid_loads_first_page_then_rest(qtbot, tmp_path, no_dialogs, monkeypatch):
-    monkeypatch.setattr(mw, "FIRST_PAGE", 5)
+    monkeypatch.setattr(grid, "FIRST_PAGE", 5)
     src = tmp_path / "many"
     for i in range(12):
         make_image(src / f"{i:03}.jpg", (16, 16), taken=f"2020:01:{i + 1:02} 00:00:00")
     window, conn = open_window(qtbot)
     window.add_source(src)
     wait_scan(qtbot, window)
-    qtbot.waitUntil(lambda: window.model.rowCount() == 12)
+    assert window.grid.count() == 12  # known from the month counts before the rows
+    qtbot.waitUntil(lambda: window.grid_source.complete)
     expected = [p.relative_path for p in db.grid_photos(conn)]
-    assert [p.relative_path for p in window.model.photos] == expected
+    assert [p.relative_path for p in window.photos] == expected
     assert expected[0] == "011.jpg"
     window.close()
     conn.close()
@@ -269,25 +271,31 @@ def test_back_button_and_keys_close_viewer(qtbot, photos, no_dialogs):
         assert window.pages.currentIndex() == mw.PAGE_VIEWER
         close()
         assert window.pages.currentIndex() == mw.PAGE_GRID
-        assert window.grid.currentIndex().row() == 2
+        assert window.grid.current_index() == 2
     window.close()
     conn.close()
 
 
-def test_scan_batches_appear_in_grid_order_and_viewer_keeps_photo(qtbot, photos, no_dialogs):
+def test_scan_batches_appear_in_grid_order_and_viewer_keeps_photo(
+    qtbot, photos, no_dialogs, monkeypatch
+):
     window, conn = open_window(qtbot)
     window.add_source(photos)
     wait_scan(qtbot, window)
-    by_name = {p.relative_path: p for p in window.model.photos}
+    by_name = {p.relative_path: p for p in window.photos}
     # Pretend the scan had only committed mid.png so far, with the viewer open on it.
-    window.model.set_photos([by_name["mid.png"]], window.sources_by_id)
+    monkeypatch.setattr(
+        window.grid_source, "rows_query", lambda conn, limit, offset: [by_name["mid.png"]]
+    )
+    window.reload_grid()
+    assert window.grid.count() == 1
     window.open_viewer(0)
     window._on_scan_added([by_name["old.jpg"], by_name["new.jpg"]])
-    assert [p.relative_path for p in window.model.photos] == ["new.jpg", "mid.png", "old.jpg"]
+    assert [p.relative_path for p in window.photos] == ["new.jpg", "mid.png", "old.jpg"]
     assert window.viewer.row == 1 and "mid.png" in window.viewer.status.text()
     assert "2 of 3" in window.viewer.status.text()
     window._on_scan_added([by_name["new.jpg"]])  # already shown: ignored
-    assert window.model.rowCount() == 3
+    assert window.grid.count() == 3
     window.close()
     conn.close()
 
@@ -300,7 +308,7 @@ def test_rescan_reload_keeps_open_photo(qtbot, photos, no_dialogs):
     window.rescan()
     wait_scan(qtbot, window)
     assert window.pages.currentIndex() == mw.PAGE_VIEWER
-    assert window.viewer.photos is window.model.photos
+    assert window.viewer.photos is window.photos
     assert "mid.png" in window.viewer.status.text()
     window.close()
     conn.close()
@@ -336,7 +344,7 @@ def test_relocate_warns_when_no_photos_are_in_the_new_folder(
     assert window.scanning
     wait_scan(qtbot, window)
     assert window.sources_by_id[source.id].root_path == str(moved)
-    assert len(window.model.photos) == 3
+    assert len(window.photos) == 3
     window.close()
     conn.close()
 
@@ -357,6 +365,6 @@ def test_remove_asks_first_and_says_files_are_kept(qtbot, photos, monkeypatch, n
     assert title == "Remove source" and "“Phone”" in text
     assert "3 photos" in text and "Your photos on disk are not touched" in text
     assert [s.id for s in window.sources] == [source.id]  # cancelled: kept
-    assert len(window.model.photos) == 3
+    assert len(window.photos) == 3
     window.close()
     conn.close()
