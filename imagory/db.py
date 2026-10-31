@@ -142,7 +142,30 @@ def _migration_1(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_1]
+def _migration_2(conn: sqlite3.Connection) -> None:
+    """Manual albums (PRD §8.8). Deleting an album or a photo removes memberships only."""
+    _execute_script(
+        conn,
+        """
+        CREATE TABLE albums (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE album_photos (
+            album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+            photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            added_at TEXT NOT NULL,
+            PRIMARY KEY (album_id, photo_id)
+        );
+
+        CREATE INDEX idx_album_photos_photo_id ON album_photos(photo_id);
+        """,
+    )
+
+
+MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -539,6 +562,152 @@ def grid_photos_for_files(conn: sqlite3.Connection, file_ids: list[int]) -> list
         file_ids,
     )
     return list(map(GridPhoto._make, cur))
+
+
+# --- albums -----------------------------------------------------------------------------
+# Manual albums (PRD §8.8). Albums are a user action outside scans. Membership rows go away
+# through ON DELETE CASCADE when an album or a photo is deleted; photos are never touched.
+
+
+class AlbumNameError(ValueError):
+    """The album name is empty or already used (names are unique, case-insensitively)."""
+
+
+@dataclass(frozen=True)
+class Album:
+    id: int
+    name: str
+    created_at: str
+    photo_count: int  # visible photos only (same rows the album view shows)
+
+
+def _clean_album_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise AlbumNameError("The album name cannot be empty.")
+    return name
+
+
+def list_albums(conn: sqlite3.Connection) -> list[Album]:
+    """All albums by name, with the number of visible (not missing) photos in each."""
+    rows = conn.execute(
+        "SELECT a.id, a.name, a.created_at, COUNT(f.id) FROM albums a "
+        "LEFT JOIN album_photos ap ON ap.album_id = a.id "
+        "LEFT JOIN photos p ON p.id = ap.photo_id "
+        "LEFT JOIN files f ON f.id = p.primary_file_id AND f.status = 'ok' "
+        "GROUP BY a.id ORDER BY a.name COLLATE NOCASE, a.id"
+    )
+    return [Album(r[0], r[1], r[2], r[3]) for r in rows]
+
+
+def create_album(conn: sqlite3.Connection, name: str) -> int:
+    name = _clean_album_name(name)
+    try:
+        with transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO albums (name, created_at) VALUES (?, ?)", (name, utc_now())
+            )
+    except sqlite3.IntegrityError as exc:
+        raise AlbumNameError(f"An album named '{name}' already exists.") from exc
+    assert cur.lastrowid is not None
+    return cur.lastrowid
+
+
+def rename_album(conn: sqlite3.Connection, album_id: int, name: str) -> None:
+    name = _clean_album_name(name)
+    try:
+        with transaction(conn):
+            conn.execute("UPDATE albums SET name = ? WHERE id = ?", (name, album_id))
+    except sqlite3.IntegrityError as exc:
+        raise AlbumNameError(f"An album named '{name}' already exists.") from exc
+
+
+def delete_album(conn: sqlite3.Connection, album_id: int) -> None:
+    """Delete an album and its memberships. Photos and files are not affected."""
+    with transaction(conn):
+        conn.execute("DELETE FROM albums WHERE id = ?", (album_id,))
+
+
+def add_photos_to_album(conn: sqlite3.Connection, album_id: int, photo_ids: Iterable[int]) -> int:
+    """Add photos to an album; photos already in it are skipped. Returns how many are new."""
+    now = utc_now()
+    with transaction(conn):
+        before = conn.total_changes
+        conn.executemany(
+            "INSERT OR IGNORE INTO album_photos (album_id, photo_id, added_at) VALUES (?, ?, ?)",
+            ((album_id, pid, now) for pid in dict.fromkeys(photo_ids)),
+        )
+        return conn.total_changes - before
+
+
+def remove_photos_from_album(
+    conn: sqlite3.Connection, album_id: int, photo_ids: Iterable[int]
+) -> int:
+    """Remove photos from an album (the photos themselves stay). Returns how many were in it."""
+    with transaction(conn):
+        before = conn.total_changes
+        conn.executemany(
+            "DELETE FROM album_photos WHERE album_id = ? AND photo_id = ?",
+            ((album_id, pid) for pid in dict.fromkeys(photo_ids)),
+        )
+        return conn.total_changes - before
+
+
+def albums_for_photo(conn: sqlite3.Connection, photo_id: int) -> list[int]:
+    """Ids of the albums containing a photo."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT album_id FROM album_photos WHERE photo_id = ? ORDER BY album_id", (photo_id,)
+        )
+    ]
+
+
+def album_ids_for_photos(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> dict[int, set[int]]:
+    """``{album_id: {photo_ids from the given ones that are in it}}``; empty albums omitted."""
+    result: dict[int, set[int]] = {}
+    ids = list(dict.fromkeys(photo_ids))
+    for start in range(0, len(ids), 500):  # stay under SQLite's variable limit
+        chunk = ids[start : start + 500]
+        rows = conn.execute(
+            "SELECT album_id, photo_id FROM album_photos "
+            f"WHERE photo_id IN ({','.join('?' * len(chunk))})",
+            chunk,
+        )
+        for album_id, photo_id in rows:
+            result.setdefault(album_id, set()).add(photo_id)
+    return result
+
+
+def album_grid_photos(
+    conn: sqlite3.Connection, album_id: int, limit: int | None = None, offset: int = 0
+) -> list[GridPhoto]:
+    """Visible photos of one album, with the columns and order of :func:`grid_photos`."""
+    cur = conn.cursor()
+    cur.row_factory = None
+    cur.execute(
+        "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
+        "p.taken_at_local, p.date_source FROM album_photos ap "
+        "JOIN photos p ON p.id = ap.photo_id CROSS JOIN files f "
+        "ON f.id = p.primary_file_id WHERE ap.album_id = ? AND f.status = 'ok' "
+        "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT ? OFFSET ?",
+        (album_id, -1 if limit is None else limit, offset),
+    )
+    return list(map(GridPhoto._make, cur))
+
+
+def album_month_counts(conn: sqlite3.Connection, album_id: int) -> list[tuple[str | None, int]]:
+    """``("YYYY-MM", n)`` newest first, then ``(None, n)`` for unknown dates, over the same
+    rows as :func:`album_grid_photos`."""
+    rows = conn.execute(
+        "SELECT substr(p.taken_at_local, 1, 7) AS month, COUNT(*) FROM album_photos ap "
+        "JOIN photos p ON p.id = ap.photo_id JOIN files f ON f.id = p.primary_file_id "
+        "WHERE ap.album_id = ? AND f.status = 'ok' GROUP BY month ORDER BY month DESC",
+        (album_id,),
+    ).fetchall()
+    dated = [(m, n) for m, n in rows if m is not None]
+    undated = [(None, n) for m, n in rows if m is None]
+    return dated + undated
 
 
 # --- settings ---------------------------------------------------------------------------
