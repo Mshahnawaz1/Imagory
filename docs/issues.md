@@ -5,6 +5,17 @@
 **Status:** fixed 2026-10-31 on `feat/v1-sources` (see "Resolution" at the end).
 Found the same day while finishing V1 §8.1 Sources.
 
+**Why it had to be fixed:** the crashing code was not test-only. The app ran it
+every time the grid reloaded with more than one screen of photos (`FIRST_PAGE`, 500):
+on startup, after each scan, and after adding, removing, or relocating a source. It also
+made the test suite unreliable, which blocked committing §8.1.
+
+**Effect on the end user:** with a library of more than 500 photos, Imagory could close
+without warning, with no error dialog, right after the grid loaded or a scan finished.
+No photos or library data were at risk: photo files are only ever read, and if a scan
+was running, SQLite rolls back the unfinished batch and the next scan picks up where it
+stopped. The crash was only ever seen in the tests, but the app ran the same code.
+
 **How it was fixed:** the grid no longer creates and deletes a `GridQueryThread` (a
 `QThread` subclass) for each reload. `GridQuery` in `imagory/ui/grid_query.py` runs each
 query as a `QRunnable` on its own one-thread `QThreadPool`, the same way thumbnails load.
