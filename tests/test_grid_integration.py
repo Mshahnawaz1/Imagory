@@ -205,6 +205,25 @@ def test_data_source_scan_rows_before_the_rest_arrives(library_db, qtbot):
     source.wait()
 
 
+@pytest.mark.parametrize("f", [db.PhotoFilter(), db.PhotoFilter(date_from="2020-01-01")])
+def test_data_source_takes_the_filtered_queries(library_db, qtbot, f):
+    conn, db_file = library_db
+    fill(conn, 90)
+    source = make_source(
+        conn,
+        db_file,
+        qtbot,
+        first_page=10,
+        rows=lambda c, limit, offset: db.filtered_grid_photos(c, f, limit, offset),
+        counts=lambda c: db.filtered_month_counts(c, f),
+    )
+    assert source.photos == db.filtered_grid_photos(conn, f)
+    assert source.count() == db.filtered_count(conn, f) == len(source.photos)
+    if f == db.PhotoFilter():
+        assert db.filtered_month_counts(conn, f) == db.month_counts(conn)
+    source.wait()
+
+
 def test_data_source_accepts_filters_scan_rows(library_db, qtbot):
     conn, db_file = library_db
     fill(conn, 30)
