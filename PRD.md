@@ -1,6 +1,6 @@
 # Imagory: Product Requirements Document
 
-Version 1.2 · October 31, 2026 · Status: V0 implemented (Windows checks pending, section 7.5). V1 in progress: section 8.1 (sources) implemented. Remaining open items are listed in section 18.
+Version 1.2 · October 31, 2026 · Status: V0 implemented (Windows checks pending, section 7.5). V1 in progress: sources (8.1), duplicates, moves and missing files (8.5, 8.2), plain-folder dates (8.4), the virtualized grid (8.6), and the album and filter layers (8.7, 8.8) implemented; Takeout sidecars are matched but not yet used by the scan, and the filter bar and albums are not yet in the main window. Remaining open items are listed in section 18.
 
 ## 1. Overview
 
@@ -260,6 +260,7 @@ photos       id, content_hash UNIQUE (NULL in V0), primary_file_id,
 
 files        id, source_id, photo_id, relative_path, size, modified_time,
              content_hash, status ('ok' | 'missing'),
+             exif_taken_at, exif_offset,                   -- raw EXIF inputs, for recomputing dates
              taken_at_local, taken_at_utc, date_source,    -- this file's best date
              sidecar_relative_path,                        -- Takeout only
              first_seen_at, last_seen_at
@@ -269,13 +270,13 @@ albums       id, name, created_at
 album_photos album_id, photo_id, added_at    PRIMARY KEY (album_id, photo_id)
 
 scan_runs    id, source_id, started_at, finished_at, status,
-             found, added, updated, unchanged, missing, errors,
+             found, added, updated, unchanged, missing, moved, errors,
              skipped_by_ext (JSON text)
 
 settings     key, value
 ```
 
-**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `scan_runs(source_id)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
+**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `files(source_id, content_hash)` (move detection), `album_photos(photo_id)`, `scan_runs(source_id)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
 
 **Design choices**
 
@@ -299,6 +300,7 @@ settings     key, value
 - The UI stays responsive during scans. CPU-heavy work runs in worker processes, not threads, because Python threads do not run CPU work in parallel.
 - **Testing:** a script generates a fake library (100,000 small images with varied EXIF dates, a share of exact duplicates, and a synthetic Takeout layout with JSON sidecars using all naming quirks from section 8.3). Real photos are tested by the author locally and are never committed to the repository. Run the 100,000-photo test at the end of V0 (scan and plain grid) and again when the V1 grid prototype exists.
 - **Takeout fixture:** `scripts/make_fake_library.py --takeout` writes the synthetic export under `OUT/Takeout` and a ground-truth `OUT/manifest.json` (expected sidecar per image, raw EXIF, JSON and filename times, expected `date_source`, `taken_at_local`, `taken_at_utc` and location), used by the section 8.3 and 8.4 tests and to check the sidecar matching report.
+- **V1 grid in the app** (`scripts/bench.py`, 95,000 photos after duplicates collapse, WSL2 offscreen, Ryzen 3 5300U; not Windows numbers): full scan 249 s, unchanged rescan 6.3 s, `month_counts` 27 ms, first screen of thumbnails 0.22 s after window creation (plus 0.3 to 0.44 s of Qt imports), whole grid loaded in the background 1.7 s, wheel scroll median 23.6 ms (11.6 ms with thumbnails in memory), one 200-photo scan batch inserted 42 ms. Filtered queries: first 200 rows in 5 to 205 ms depending on the filter. Smoothness by eye and Windows numbers are still to check.
 - **V1 grid prototype** (`scripts/grid_prototype.py --bench`, 100,000 in-memory items in 241 month sections, WSL offscreen): layout build 0.3 ms, reflow 0.04 ms, first paint 45 ms, full-viewport repaint about 1.5 ms (median scroll step 6 ms, worst 16 ms) with thumbnails in memory. Still to measure against the real thumbnail cache, by eye on a real display, and on Windows.
 
 ## 11. Privacy
@@ -395,6 +397,22 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Adding a source | Refused if the folder is already a source or is inside the library folder; an overlapping folder is allowed after a warning |
 | Relocate check | A sample of 50 known relative paths is checked under the new folder, and the user confirms if few are found |
 | Remove source | Thumbnails are deleted first (they regenerate if removal stops halfway), then the rows; photos left with no files go too. Removing album memberships waits for section 8.8 |
+| Content hash | BLAKE2b, 16-byte digest (32 hex characters), computed in the worker from the single read of the file |
+| Primary copy rules | First ok file by source added date, source id, first seen, file id; recomputed on every status or membership change. If all copies are missing, the first missing file stays primary so a "Missing" filter can show the photo |
+| Photo date | Best date across all of a photo's files, missing ones included, so unplugging a drive does not change dates |
+| Move detection | A new file matches any missing row of the same source with the same hash, oldest first, not only rows that went missing in this scan, because a cancelled scan keeps no state. Moves never cross sources |
+| Changed hash | A sole file edited in place re-keys its photo (keeping its id and albums); otherwise the file moves to the photo with the new hash, and a photo left with no files is deleted, its album memberships moving with the file |
+| Thumbnail cleanup | Removing a source or missing items deletes only thumbnails of photos being deleted; shared thumbnails stay |
+| V0 upgrade | Migration 3 is schema only; unhashed rows count as changed on the next scan, are hashed in place (keeping file ids) and merge by hash. Unhashed rows that are still missing are left alone |
+| Takeout sidecar matching | Case-insensitive; image name plus an optional prefix of `.supplemental-metadata`, then an optional `(n)`; a numbered image `X(n).ext` takes `X.ext(n).json` first; the counter must match; long names match by prefix of at least 30 characters. Ties: title match, exact before truncated, original before edited, then name; greedy, so the result does not depend on order |
+| Edited copies | Use their own sidecar if any, otherwise share the original's. `-edited` is confirmed; localized suffixes are unconfirmed guesses |
+| Takeout location | `geoData` only (ignored when both coordinates are 0); no fallback to `geoDataExif`, so a location removed in Google Photos does not return |
+| Takeout Trash | Skipped only directly under the root or a "Google Photos" folder; deeper folders named Trash are imported. Localized names unconfirmed |
+| Albums | Names unique, case-insensitive, trimmed. `ON DELETE CASCADE` on both album_photos keys covers album, photo, and source deletion. Album counts exclude missing photos; memberships of missing photos are kept |
+| Search text | Words split on whitespace and AND-ed, each a case-insensitive `LIKE` on the relative path (filename and folders) of any copy, with `%`, `_` and `\` escaped |
+| Filters | Source, folder and text must hold for one copy; folder matches whole path segments; date range inclusive, excluding unknown dates when set; "Missing" shows only photos with no ok file; "Has duplicates" means more than one file row. Filtered queries pin the `taken_at_local` index, because SQLite otherwise sorts every row |
+| Grid in the app | `PhotoGrid` with a database data source whose row and count queries are injected (plain, filtered, or album); total height known from month counts before all rows load; unloaded cells paint as placeholders. Month counts use index seeks (about 25 ms at 100,000), so the unfiltered grid uses them instead of the filtered query |
+| Scan rows in the grid | Inserted at their sorted positions keeping the selection, current photo and top visible photo; only photos that became visible in the batch are reported, so a new copy never shows twice |
 | Date logic (V1) | Pure functions in `imagory/dates.py`; "now" and the computer's time zone are injectable for tests |
 | Filename dates | Patterns match at the start of the name, case-insensitively; WhatsApp date-only names give midnight local time; invalid, pre-1990 and future filename dates fall through to the modified time |
 | Takeout JSON vs EXIF | Less than 24 h apart: EXIF wall-clock as local time plus JSON UTC, `date_source = takeout_json` (pending confirmation, section 18). 24 h or more: JSON wins, converted with the computer's zone. With JSON present, its UTC overrides EXIF `OffsetTimeOriginal` |
@@ -423,3 +441,5 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 6. **Localized Takeout folder names (V1):** collect the localized names of "Google Photos" that type detection should recognize.
 7. **Takeout JSON within 24 h of EXIF:** the date is stored with `date_source = takeout_json` so it keeps the top rank across copies; `exif` is the alternative. Confirm.
 8. **Future EXIF dates:** the 1990 and future limits apply only to filename dates. Decide whether EXIF dates in the future (wrong camera clock) should be rejected too.
+9. **Album edits during a scan:** the scan thread is the only writer. Either allow album edits mid-scan (tiny transactions, with a `busy_timeout` on the UI connection) or disable album actions while scanning. Decide before wiring albums into the main window.
+10. **Automatic rescan after the V0 upgrade:** upgraded files have no hash until the next scan. Decide whether to start a scan automatically.

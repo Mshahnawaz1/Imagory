@@ -122,6 +122,8 @@ D's queries if trivial). Full tests and ruff after each merge; then PRD, README,
 | --- | --- |
 | A | merged |
 | B | merged |
-| C | started |
+| C | merged |
 | D | merged |
 | E | merged (296390e) |
+
+Wave 1 is complete: all five branches merged into `main` (328 tests pass). Wave 2 is listed in `tasks.md`.

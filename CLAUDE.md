@@ -42,7 +42,7 @@ Create new modules as the work needs them.
 - `modified_time` is integer nanoseconds (`st_mtime_ns`).
 - `taken_at_local` is ISO 8601 with no offset (`2019-01-31T23:59:59`). UTC timestamps are ISO 8601 ending in `Z`.
 - Schema version lives in `PRAGMA user_version`. Each version step is a numbered migration that runs in a transaction, and `imagory.db` is copied to `imagory.db.bak` before migrating. Never edit a released migration; add a new one.
-- Thumbnails go in `thumbs/source-<id>/ab/cd/<blake2b(relative_path)>.jpg` until they are keyed by content hash (§8.5), 320 px longest edge, JPEG quality 85, EXIF orientation applied, Pillow draft mode for JPEGs.
+- Thumbnails go in `thumbs/ab/cd/<content_hash>.jpg` (BLAKE2b, 16 bytes, shared across sources), 320 px longest edge, JPEG quality 85, EXIF orientation applied, Pillow draft mode for JPEGs.
 
 ## Library folder
 - Windows uses `%LOCALAPPDATA%\Imagory\`, other platforms `$XDG_DATA_HOME/imagory` (default `~/.local/share/imagory`).

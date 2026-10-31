@@ -3,21 +3,17 @@
 Scope and design are in `PRD.md`. A task is done only when it is implemented, tested, and
 committed. Completed work is listed at the end, one line per task.
 
-## Next: V1
+## Next: V1 wave 2
 
-- [ ] §8.2 Missing files: moved-file detection by hash, a photo is missing only when all its files are, "Remove missing items" per source
-- [ ] §8.3 Takeout import: sidecar matching with all naming quirks and a matching report; read `photoTakenTime`, `geoData`, `title`; skip `Trash`
-- [ ] §8.4 Dates: wire `imagory/dates.py` into the scanner and db
-- [ ] §8.5 Duplicates: BLAKE2b hash in the worker pass, photo identity by hash, primary copy, thumbnails keyed by hash, V0 migration
-- [ ] §8.6 Grid integration:
-  - month counts in db.py
-  - a DB data source for the grid
-  - thumbnail provider
-  - replace `PhotoGridView` with `PhotoGrid`
-  - rerun the 100k bench on Windows
-- [ ] §8.6 Browsing: multi-select actions, viewer zoom/pan, info panel, Show in Explorer
-- [ ] §8.7 Search and filters: text search; date, source, folder, album, has-duplicates, missing
-- [ ] §8.8 Albums: tables, create/rename/delete, add/remove photos, album view
+Wave 1 is merged (see `docs/v1-agents.md`). Remaining V1 work:
+
+- [ ] §8.3/§8.4 Takeout in the scan: keep JSON names from the walk, `match_directory` per folder, read sidecars, fill `FileJob.takeout_timestamp` and `sidecar_relative_path`, skip Trash, set photo latitude/longitude, edited copies use the original's date, log the matching report
+- [ ] §8.1/§8.4 Recompute dates on a source type change (from stored EXIF inputs, filename, mtime, sidecar)
+- [ ] §8.7 Filter bar in the main window: switch the grid's row/count queries and scan-row `accepts`; `db.month_counts` for an empty filter; filtered count in the status bar
+- [ ] §8.8 Albums in the main window: Albums menu, "Add to album" on toolbar and right-click menu for the selection, album view, "Remove from album"; decide on album edits during a scan (PRD §18 item 9)
+- [ ] §8.6 Browsing: viewer zoom/pan, info panel (date and its source, location, source, path, size, dimensions, "Also found in…"), Show in Explorer, "Open in viewer" in the right-click menu
+- [ ] Decide on an automatic scan after the V0 upgrade (PRD §18 item 10)
+- [ ] Rerun the 100k bench on Windows and judge scrolling by eye
 
 ## Open from V0
 
@@ -43,4 +39,12 @@ committed. Completed work is listed at the end, one line per task.
 - [x] Synthetic Takeout export with all sidecar quirks and a ground-truth manifest (`make_fake_library.py --takeout`)
 - [x] PRD and README updated for the three items above
 - [x] §8.1 Sources: source type and detection, rename, relocate, remove, per-source thumbnails, multi-source scan, Add source and Sources dialogs, grid crash fix (`docs/issues.md` issue 1)
-  - deferred: recompute dates on type change (needs §8.3/§8.4 wiring); remove album memberships (needs §8.8)
+  - deferred: recompute dates on type change (wave 2); album memberships now go with removed photos (cascade)
+- [x] Wave 1 (five parallel agents, `docs/v1-agents.md`):
+  - §8.5 duplicates: BLAKE2b in the worker, photo identity by hash, primary copy, thumbnails keyed by hash, V0 upgrade (migration 3)
+  - §8.2 moved-file detection, missing-photo rule, "Remove missing…" per source
+  - §8.4 dates wired into the scan for plain folders (EXIF with offset, filename, mtime, best date across copies)
+  - §8.3 Takeout sidecar matching, reading, Trash rule, matching report (`takeout.py`, not yet used by the scan)
+  - §8.6 `PhotoGrid` in the app: month counts, DB data source, thumbnail provider, bench on WSL
+  - §8.7 filter queries and `FilterBar` widget (not yet in the main window)
+  - §8.8 albums schema (migration 2), queries, Albums and Add-to-album dialogs (not yet in the main window)

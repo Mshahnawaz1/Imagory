@@ -11,8 +11,9 @@ extracted Google Takeout exports and get one fast, browsable library.
 
 **Status: V1 in progress.** Add several photo folders as sources, scan them in the
 background, browse all their thumbnails in one grid, view photos, and reopen the library
-later without rescanning. Takeout dates, duplicates, albums, and search are still to come
-(see [PRD.md](PRD.md)).
+later without rescanning. Exact duplicates show once, moved files are recognised, and
+dates come from EXIF (with its time zone when known) or the filename. Takeout dates,
+albums, and search are still to come in the app (see [PRD.md](PRD.md)).
 
 ## Using Imagory
 
@@ -26,16 +27,22 @@ later without rescanning. Takeout dates, duplicates, albums, and search are stil
    to the grid.
 3. **Rescan all** finds new, changed, and missing photos in every source. Unchanged photos
    are skipped, so it is quick. Missing photos are hidden, not forgotten. They come back if
-   the file returns. A source whose folder is not available (for example an unplugged
-   drive) is reported, and the other sources are still scanned.
+   the file returns. A file you moved to another folder in the same source keeps its place
+   instead of showing up as missing and new. A source whose folder is not available (for
+   example an unplugged drive) is reported, and the other sources are still scanned.
 4. **Sources…** lists your sources with their photo and missing counts. From there you can
    add, rescan, rename, or change the type of a source. **Relocate…** points a source at
    its new folder when a drive letter changes or the folder moved, without rescanning
-   from scratch. **Remove…** makes Imagory forget a source and delete its thumbnails,
-   after you confirm. The photos themselves are never touched.
+   from scratch. **Remove missing…** makes Imagory forget the source's missing files, and
+   **Remove…** forgets the whole source and its thumbnails, both after you confirm. The
+   photos themselves are never touched.
+5. **Duplicates:** identical files (same contents, anywhere in your sources) appear once in
+   the grid. Select photos with click, Ctrl-click, Shift-click, or Ctrl+A; the status bar
+   shows how many are selected.
 
 Supported formats: JPEG, PNG, GIF (first frame), and HEIC/HEIF. Photos are sorted newest
-first by the date the photo was taken (EXIF), falling back to the file's modified time.
+first by the date the photo was taken (EXIF), then a date in the filename (such as
+`IMG_20190131_235959`), then the file's modified time, with month headers.
 
 ### Where Imagory keeps its data
 
