@@ -98,9 +98,8 @@ def test_rescan_and_missing_thumbnail_regenerates(qtbot, photos, no_dialogs):
     assert "Missing: 1" in no_dialogs[-1][1]
     assert len(window.model.photos) == 2
     qtbot.waitUntil(lambda: all(window.loader._cache.get(p.photo_id) for p in window.model.photos))
-    folder = thumbs.source_thumbs_dir(window.thumbs_root, window.sources[0].id)
     for p in window.model.photos:
-        assert thumbs.thumb_path(folder, p.relative_path).exists()
+        assert thumbs.thumb_path(window.thumbs_root, p.content_hash).exists()
     window.close()
     conn.close()
 
@@ -151,7 +150,7 @@ def test_unavailable_source_is_reported_and_others_scan(qtbot, photos, tmp_path,
     wait_scan(qtbot, window)
     moved = tmp_path / "usb-moved"
     other.rename(moved)  # the drive letter changed
-    make_image(photos / "later.jpg")
+    make_image(photos / "later.jpg", color=(0, 90, 0))  # not a copy of x.jpg
     window.rescan()
     wait_scan(qtbot, window)
     title, text = no_dialogs[-1]
