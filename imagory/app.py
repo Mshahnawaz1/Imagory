@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import sys
+from pathlib import Path
 
-from imagory import __version__, db, paths
+from imagory import __version__, db, paths, thumbs
 from imagory.logs import setup_logging
 
 log = logging.getLogger(__name__)
@@ -14,6 +16,14 @@ log = logging.getLogger(__name__)
 def _log_unhandled(exc_type, exc, tb) -> None:
     log.critical("Unhandled exception", exc_info=(exc_type, exc, tb))
     sys.__excepthook__(exc_type, exc, tb)
+
+
+def upgrade_thumbnail_cache(conn: sqlite3.Connection, thumbs_root: Path) -> None:
+    """Clear a cache written with another layout; thumbnails regenerate on demand."""
+    if db.get_setting(conn, "thumbs_layout") != thumbs.LAYOUT_VERSION:
+        log.info("Clearing the thumbnail cache for layout %s", thumbs.LAYOUT_VERSION)
+        thumbs.clear_thumbs(thumbs_root)
+        db.set_setting(conn, "thumbs_layout", thumbs.LAYOUT_VERSION)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -32,6 +42,7 @@ def run(argv: list[str] | None = None) -> int:
 
     try:
         conn = db.open_database(paths.db_path(library_root))
+        upgrade_thumbnail_cache(conn, paths.thumbs_dir(library_root))
     except Exception as exc:
         log.exception("Could not open the library database")
         QMessageBox.critical(None, "Imagory", f"Could not open the library database:\n{exc}")

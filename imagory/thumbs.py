@@ -23,6 +23,8 @@ log = logging.getLogger(__name__)
 
 THUMB_SIZE = 320
 THUMB_QUALITY = 85
+# Version of the cache layout below; a different stored value means the cache is cleared.
+LAYOUT_VERSION = "2"
 # Large panoramas are legitimate photos; keep a limit against decompression bombs.
 Image.MAX_IMAGE_PIXELS = 300_000_000
 
@@ -47,8 +49,17 @@ def fold_path(relative_path: str) -> str:
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
+def source_thumbs_dir(thumbs_root: Path, source_id: int) -> Path:
+    """Each source's thumbnails live in their own folder, so two sources with the same
+    relative path never share one, and removing a source removes one folder.
+
+    Interim layout until thumbnails are keyed by content hash (PRD §8.5).
+    """
+    return thumbs_root / f"source-{source_id}"
+
+
 def thumb_key(relative_path: str) -> str:
-    """V0 key: BLAKE2b of the case-folded relative path (V1 will key by content hash)."""
+    """BLAKE2b of the case-folded relative path, within a source's folder."""
     return hashlib.blake2b(fold_path(relative_path).encode("utf-8"), digest_size=16).hexdigest()
 
 
@@ -62,6 +73,17 @@ def clear_thumbs(thumbs_root: Path) -> None:
     if thumbs_root.exists():
         shutil.rmtree(thumbs_root)
     thumbs_root.mkdir(parents=True, exist_ok=True)
+
+
+def remove_source_thumbs(thumbs_root: Path, source_id: int) -> None:
+    """Delete one source's thumbnails. Leftovers are only disk space, so errors are logged."""
+    folder = source_thumbs_dir(thumbs_root, source_id)
+    if folder.exists():
+        shutil.rmtree(folder, onexc=_log_rmtree_error)
+
+
+def _log_rmtree_error(func, path, exc: BaseException) -> None:
+    log.warning("Could not delete thumbnail %s: %s", path, exc)
 
 
 def _to_rgb(img: Image.Image) -> Image.Image:

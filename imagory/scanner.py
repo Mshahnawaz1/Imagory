@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from imagory import db
-from imagory.thumbs import FileJob, FileResult, fold_path, process_batch
+from imagory.thumbs import FileJob, FileResult, fold_path, process_batch, source_thumbs_dir
 
 log = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ class Scanner:
         self,
         conn: sqlite3.Connection,
         source: db.Source,
-        thumbs_root: Path,
+        thumbs_root: Path,  # the library's thumbnail cache; each source has a folder in it
         library_root: Path | None = None,
         *,
         workers: int | None = None,
@@ -327,7 +327,8 @@ class Scanner:
         context = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(max_workers=self.workers, mp_context=context) as pool:
             in_flight: set[Future[list[FileResult]]] = set()
-            root, thumbs_root = str(self.source.root_path), str(self.thumbs_root)
+            root = str(self.source.root_path)
+            thumbs_root = str(source_thumbs_dir(self.thumbs_root, self.source.id))
             exhausted = False
             try:
                 while True:
