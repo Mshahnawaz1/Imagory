@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -134,7 +135,10 @@ class MainWindow(QMainWindow):
         self.grid.set_data_source(self.grid_source)
         self.grid.activated.connect(self.open_viewer)
         self.grid.selection_changed.connect(self._show_photo_count)
+        self.grid.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.grid.viewport().customContextMenuRequested.connect(self._grid_context_menu)
         self.viewer = PhotoViewer(self)
+        self.viewer.set_connection(self.conn)
         self.viewer.closed.connect(self.close_viewer)
         self.empty = EmptyPage(self.add_source_interactive, self)
 
@@ -305,6 +309,19 @@ class MainWindow(QMainWindow):
             if selected:
                 text += f"  ·  {selected:,} selected"
             self.status_label.setText(text)
+
+    def _grid_context_menu(self, pos) -> None:
+        index = self.grid.index_at(pos)
+        if index is None:
+            return
+        if index not in self.grid.selected_indexes():
+            self.grid.click(index, Qt.KeyboardModifier.NoModifier)
+        self._grid_menu(index).exec(self.grid.viewport().mapToGlobal(pos))
+
+    def _grid_menu(self, index: int) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction("Open in viewer").triggered.connect(lambda: self.open_viewer(index))
+        return menu
 
     def open_viewer(self, index: int) -> None:
         if not 0 <= index < len(self.photos):
