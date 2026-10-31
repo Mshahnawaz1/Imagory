@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from imagory import db, paths, thumbs
+from imagory import db, paths, sources, thumbs
 from imagory.scanner import Scanner
 from tests.imaging import make_image
 
@@ -43,6 +43,10 @@ def lib(library):
     conn.close()
 
 
+def source_thumbs(root, source):
+    return thumbs.source_thumbs_dir(paths.thumbs_dir(root), source.id)
+
+
 def scan(conn, source, root, **kwargs):
     scanner = Scanner(conn, source, paths.thumbs_dir(root), root, workers=2, **kwargs)
     return scanner, scanner.run()
@@ -72,8 +76,8 @@ def test_full_scan_rescan_modify_delete(source_dir, lib):
     assert (photo["width"], photo["height"], photo["format"]) == (300, 200, "JPEG")
     assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 5
     for rel in rows:
-        assert thumbs.thumb_path(paths.thumbs_dir(root), rel).exists()
-    grid = db.grid_photos(conn, source.id)
+        assert thumbs.thumb_path(source_thumbs(root, source), rel).exists()
+    grid = db.grid_photos(conn)
     # Newest first: mtime-dated files (today) come before the 2019 EXIF dates.
     assert [p.relative_path for p in grid][-2:] == ["2019/b.JPG", "2019/a.jpg"]
     assert snapshot(source_dir) == before
@@ -91,7 +95,7 @@ def test_full_scan_rescan_modify_delete(source_dir, lib):
     assert (c.added, c.updated, c.unchanged, c.missing, c.errors) == (0, 1, 3, 1, 0)
     status = dict(conn.execute("SELECT relative_path, status FROM files").fetchall())
     assert status["2019/a.jpg"] == "missing"
-    assert "2019/a.jpg" not in [p.relative_path for p in db.grid_photos(conn, source.id)]
+    assert "2019/a.jpg" not in [p.relative_path for p in db.grid_photos(conn)]
     width = conn.execute(
         "SELECT p.width FROM photos p JOIN files f ON f.id = p.primary_file_id "
         "WHERE f.relative_path = '2020/c.png'"
@@ -122,7 +126,7 @@ def test_reappearing_unchanged_file_returns_to_ok(source_dir, lib, tmp_path):
     os.replace(moved, source_dir / "2019" / "a.jpg")  # same size and mtime
     c = scan(conn, source, root)[1].counts
     assert (c.added, c.updated, c.unchanged, c.missing) == (0, 0, 5, 0)
-    assert len(db.grid_photos(conn, source.id)) == 5
+    assert len(db.grid_photos(conn)) == 5
 
 
 def test_corrupt_image_is_counted_and_scan_continues(source_dir, lib):
@@ -197,16 +201,71 @@ def test_missing_source_folder_fails_cleanly(tmp_path, lib):
     assert [r["status"] for r in db.scan_runs(conn, source.id)] == ["failed"]
 
 
-def test_change_folder_deletes_rows_and_thumbnails(source_dir, lib):
+def test_two_sources_with_the_same_paths_stay_apart(source_dir, tmp_path, lib):
     root, conn = lib
+    other = tmp_path / "other"
+    make_image(other / "2019" / "a.jpg", (40, 30), color=(0, 200, 0), taken="2018:05:05 05:05:05")
+    before = snapshot(source_dir), snapshot(other)
+    first = db.create_source(conn, str(source_dir), "photos")
+    second = db.create_source(conn, str(other), "other")
+    scan(conn, first, root)
+    c = scan(conn, second, root)[1].counts
+    assert (c.found, c.added, c.missing) == (1, 1, 0)  # the first source's rows are not its
+
+    grid = db.grid_photos(conn)
+    assert len(grid) == 6
+    same = [p for p in grid if p.relative_path == "2019/a.jpg"]
+    assert sorted(p.source_id for p in same) == [first.id, second.id]
+    a_first = thumbs.thumb_path(source_thumbs(root, first), "2019/a.jpg")
+    a_second = thumbs.thumb_path(source_thumbs(root, second), "2019/a.jpg")
+    assert a_first != a_second and a_first.exists() and a_second.exists()
+
+    # Rescanning one source never marks the other's files missing.
+    assert scan(conn, first, root)[1].counts.missing == 0
+    assert len(db.grid_photos(conn)) == 6
+    assert (snapshot(source_dir), snapshot(other)) == before
+
+
+def test_remove_source_deletes_its_rows_and_thumbnails_only(source_dir, tmp_path, lib):
+    root, conn = lib
+    other = tmp_path / "other"
+    make_image(other / "x.jpg")
     before = snapshot(source_dir)
+    first = db.create_source(conn, str(source_dir), "photos")
+    second = db.create_source(conn, str(other), "other")
+    scan(conn, first, root)
+    scan(conn, second, root)
+    sources.remove_source(conn, paths.thumbs_dir(root), first.id)
+    assert [s.id for s in db.list_sources(conn)] == [second.id]
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 1
+    assert db.scan_runs(conn, first.id) == []
+    assert not source_thumbs(root, first).exists()
+    assert thumbs.thumb_path(source_thumbs(root, second), "x.jpg").exists()
+    assert [p.relative_path for p in db.grid_photos(conn)] == ["x.jpg"]
+    assert snapshot(source_dir) == before
+
+
+def test_relocated_source_finds_its_files_again(source_dir, tmp_path, lib):
+    root, conn = lib
     source = db.create_source(conn, str(source_dir), "photos")
     scan(conn, source, root)
-    db.delete_source(conn, source.id)
-    thumbs.clear_thumbs(paths.thumbs_dir(root))
-    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
-    assert not any(p.is_file() for p in paths.thumbs_dir(root).rglob("*"))
-    assert snapshot(source_dir) == before
+    ids = dict(conn.execute("SELECT relative_path, id FROM files").fetchall())
+    moved = tmp_path / "moved" / "photos"
+    moved.parent.mkdir()
+    os.replace(source_dir, moved)  # same sizes and mtimes, like a changed drive letter
+
+    # The old folder is gone: the scan fails without marking anything missing.
+    with pytest.raises(FileNotFoundError):
+        scan(conn, source, root)
+    assert conn.execute("SELECT COUNT(*) FROM files WHERE status = 'missing'").fetchone()[0] == 0
+
+    assert sources.relocation_matches(conn, source.id, moved) == (5, 5)
+    db.relocate_source(conn, source.id, str(moved))
+    source = db.get_source(conn, source.id)
+    c = scan(conn, source, root)[1].counts
+    assert (c.added, c.updated, c.unchanged, c.missing) == (0, 0, 5, 0)
+    assert dict(conn.execute("SELECT relative_path, id FROM files").fetchall()) == ids
 
 
 def test_on_added_reports_each_committed_photo(source_dir, lib):
@@ -216,7 +275,7 @@ def test_on_added_reports_each_committed_photo(source_dir, lib):
     scan(conn, source, root, commit_batch=2, worker_batch=1, on_added=batches.append)
     assert len(batches) > 1  # reported per commit, not only at the end
     reported = sorted(p.relative_path for batch in batches for p in batch)
-    assert reported == sorted(p.relative_path for p in db.grid_photos(conn, source.id))
+    assert reported == sorted(p.relative_path for p in db.grid_photos(conn))
 
     # A rescan with nothing new reports nothing.
     batches.clear()
