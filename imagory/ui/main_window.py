@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import replace
+from html import escape as html_escape
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -11,9 +13,11 @@ from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -25,7 +29,9 @@ from PySide6.QtWidgets import (
 
 from imagory import __version__, db, paths, sources, takeout
 from imagory.scanner import Progress, ScanSummary
-from imagory.ui.grid import PhotoDataSource, PhotoThumbnails
+from imagory.ui.albums import AddToAlbumDialog, AlbumsDialog
+from imagory.ui.filter_bar import FilterBar
+from imagory.ui.grid import PhotoDataSource, PhotoThumbnails, view_queries
 from imagory.ui.photo_grid import PhotoGrid
 from imagory.ui.scan_thread import ScanThread, SourceScanResult
 from imagory.ui.sources_dialog import TYPE_NAMES, AddSourceDialog, SourcesDialog, default_label
@@ -116,6 +122,7 @@ class MainWindow(QMainWindow):
         self._anchor_id: int | None = None  # photo to keep in view across a grid reload
         self._scan_prefix = ""  # names the source being scanned when there are several
         self._closing = False
+        self.album: db.Album | None = None  # the album being shown, if any
 
         self.setWindowTitle("Imagory")
         self.resize(1200, 800)
@@ -134,6 +141,9 @@ class MainWindow(QMainWindow):
         self.grid.set_data_source(self.grid_source)
         self.grid.activated.connect(self.open_viewer)
         self.grid.selection_changed.connect(self._show_photo_count)
+        self.grid.selection_changed.connect(self._update_album_actions)
+        self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.grid.customContextMenuRequested.connect(self._show_grid_menu)
         self.viewer = PhotoViewer(self)
         self.viewer.closed.connect(self.close_viewer)
         self.empty = EmptyPage(self.add_source_interactive, self)
@@ -142,7 +152,22 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.empty)
         self.pages.addWidget(self.grid)
         self.pages.addWidget(self.viewer)
-        self.setCentralWidget(self.pages)
+
+        self.filter_bar = FilterBar(
+            self,
+            sources=lambda: [(s.id, s.label) for s in self.sources],
+            folders=lambda source_id: db.folder_paths(self.conn, source_id),
+        )
+        self.filter_bar.filterChanged.connect(self._on_filter_changed)
+        self.album_bar = self._build_album_bar()
+        central = QWidget(self)
+        column = QVBoxLayout(central)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self.filter_bar)
+        column.addWidget(self.album_bar)
+        column.addWidget(self.pages, 1)
+        self.setCentralWidget(central)
 
         self._build_actions()
         self._build_status_bar()
@@ -162,6 +187,19 @@ class MainWindow(QMainWindow):
         self.sources_action = QAction("Sources…", self)
         self.sources_action.setStatusTip("Rename, rescan, relocate, or remove sources")
         self.sources_action.triggered.connect(self.show_sources)
+        self.add_to_album_action = QAction("Add to album…", self)
+        self.add_to_album_action.setStatusTip("Add the selected photos to an album")
+        self.add_to_album_action.triggered.connect(self.add_selection_to_album)
+        self.remove_from_album_action = QAction("Remove from album", self)
+        self.remove_from_album_action.setStatusTip(
+            "Take the selected photos out of this album (the photos stay)"
+        )
+        self.remove_from_album_action.triggered.connect(self.remove_selection_from_album)
+        self.manage_albums_action = QAction("Manage albums…", self)
+        self.manage_albums_action.setStatusTip("Create, rename, or delete albums")
+        self.manage_albums_action.triggered.connect(self.show_albums)
+        self.all_photos_action = QAction("All photos", self)
+        self.all_photos_action.triggered.connect(lambda: self.show_album(None))
 
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("main-toolbar")
@@ -169,6 +207,8 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.add_action)
         toolbar.addAction(self.rescan_action)
         toolbar.addAction(self.sources_action)
+        toolbar.addSeparator()
+        toolbar.addAction(self.add_to_album_action)
         self.addToolBar(toolbar)
         self.toolbar = toolbar
 
@@ -181,9 +221,25 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
 
+        self.albums_menu = self.menuBar().addMenu("&Albums")
+        self.albums_menu.aboutToShow.connect(self._fill_albums_menu)
+        self._fill_albums_menu()
+
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Open log folder", self.open_log_folder)
         help_menu.addAction("About Imagory", self.show_about)
+
+    def _build_album_bar(self) -> QWidget:
+        bar = QWidget(self)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 4, 8, 4)
+        self.album_label = QLabel(bar)
+        back = QPushButton("Show all photos", bar)
+        back.clicked.connect(lambda: self.show_album(None))
+        row.addWidget(self.album_label, 1)
+        row.addWidget(back)
+        bar.setVisible(False)
+        return bar
 
     def _build_status_bar(self) -> None:
         bar = self.statusBar()
@@ -205,18 +261,36 @@ class MainWindow(QMainWindow):
         """The grid's loaded photos, in grid order."""
         return self.grid_source.photos
 
-    def reload_grid(self) -> None:
+    def current_filter(self) -> db.PhotoFilter:
+        """What the grid shows: the filter bar's filter, within the album if one is open."""
+        return replace(self.filter_bar.filter(), album_id=self.album.id if self.album else None)
+
+    def _apply_view(self) -> None:
+        """Point the grid at the current filter and album, and show it from the top."""
+        rows, counts, accepts = view_queries(self.current_filter())
+        self.grid_source.rows_query = rows
+        self.grid_source.counts_query = counts
+        self.grid_source.accepts = accepts
+        self.reload_grid(keep_position=False)
+
+    def _on_filter_changed(self, _f: db.PhotoFilter) -> None:
+        if self.pages.currentIndex() == PAGE_VIEWER:
+            self.close_viewer(-1)
+        self._apply_view()
+
+    def reload_grid(self, keep_position: bool = True) -> None:
         """Show the library straight from the database. Never starts a scan.
 
         The first screen is queried directly; the rest loads on a background thread.
         The open photo, or the photo at the top left of the grid, stays in view.
         """
-        self._anchor_id = self._current_anchor()
-        scroll_y = self.grid.scroll_y()
+        self._anchor_id = self._current_anchor() if keep_position else None
+        scroll_y = self.grid.scroll_y() if keep_position else 0
         if not self.sources:
             self.grid_source.clear()
             self.grid.set_data_source(self.grid_source)
             self.pages.setCurrentIndex(PAGE_EMPTY)
+            self._update_bars()
             self._update_actions()
             self.status_label.setText("")
             return
@@ -230,8 +304,16 @@ class MainWindow(QMainWindow):
         self._update_empty_text()
         if self.pages.currentIndex() != PAGE_VIEWER:
             self.pages.setCurrentIndex(PAGE_GRID)
+        self._update_bars()
         self._update_actions()
         self._show_photo_count()
+
+    def _update_bars(self) -> None:
+        in_grid = bool(self.sources) and self.pages.currentIndex() != PAGE_VIEWER
+        self.filter_bar.setVisible(in_grid)
+        self.album_bar.setVisible(in_grid and self.album is not None)
+        if self.album is not None:
+            self.album_label.setText(f"Album: <b>{html_escape(self.album.name)}</b>")
 
     def _on_rest_of_grid(self, positions: list[int]) -> None:
         if self._closing:
@@ -291,6 +373,10 @@ class MainWindow(QMainWindow):
     def _update_empty_text(self) -> None:
         if self.scanning:
             text = "Looking for photos…"
+        elif self.album is not None:
+            text = "This album has no photos to show. Select photos and use Add to album."
+        elif not self.current_filter().is_empty:
+            text = "No photos match the filter."
         else:
             text = "No photos to show. Add photos to your folders, then use Rescan all."
         self.grid.set_empty_text(text)
@@ -298,22 +384,113 @@ class MainWindow(QMainWindow):
     def _show_photo_count(self) -> None:
         if self.sources and not self.scanning:
             count = len(self.sources)
-            text = (
-                f"{self.grid_source.count():,} photos in {count} source{'s' if count != 1 else ''}"
-            )
+            photos = self.grid_source.count()
+            if self.album is not None:
+                text = f"Album “{self.album.name}”: {photos:,} photos"
+                if not self.filter_bar.filter().is_empty:
+                    text += " match the filter"
+            elif not self.current_filter().is_empty:
+                text = f"{photos:,} photos match the filter"
+            else:
+                text = f"{photos:,} photos in {count} source{'s' if count != 1 else ''}"
             selected = self.grid.selected_count()
             if selected:
                 text += f"  ·  {selected:,} selected"
             self.status_label.setText(text)
 
+    # --- albums -------------------------------------------------------------------------
+
+    def _fill_albums_menu(self) -> None:
+        menu = self.albums_menu
+        menu.clear()
+        menu.addAction(self.manage_albums_action)
+        menu.addAction(self.add_to_album_action)
+        menu.addAction(self.remove_from_album_action)
+        menu.addSeparator()
+        menu.addAction(self.all_photos_action)
+        for album in db.list_albums(self.conn):
+            action = menu.addAction(f"{album.name}  ({album.photo_count:,})")
+            action.setCheckable(True)
+            action.setChecked(self.album is not None and self.album.id == album.id)
+            action.triggered.connect(lambda _checked=False, a=album: self.show_album(a))
+
+    def show_album(self, album: db.Album | None) -> None:
+        """Show one album in the grid, or all photos with ``None``. The filters still apply."""
+        self.album = album
+        if self.pages.currentIndex() == PAGE_VIEWER:
+            self.close_viewer(-1)
+        self._apply_view()
+
+    def show_albums(self) -> None:
+        if self.scanning:
+            return
+        dialog = AlbumsDialog(self.conn, self)
+        dialog.exec()
+        dialog.deleteLater()
+        if self.album is not None:  # it may have been renamed or deleted
+            current = next((a for a in db.list_albums(self.conn) if a.id == self.album.id), None)
+            if current is None:
+                self.show_album(None)
+            elif current != self.album:
+                self.album = current
+                self._update_bars()
+                self._show_photo_count()
+
+    def selected_photo_ids(self) -> list[int]:
+        ids = (self.grid_source.item(i) for i in self.grid.selected_indexes())
+        return [p.photo_id for p in ids if p is not None]
+
+    def add_selection_to_album(self) -> None:
+        ids = self.selected_photo_ids()
+        if self.scanning or not ids:
+            return
+        dialog = AddToAlbumDialog(self.conn, ids, self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def remove_selection_from_album(self) -> None:
+        ids = self.selected_photo_ids()
+        if self.scanning or self.album is None or not ids:
+            return
+        db.remove_photos_from_album(self.conn, self.album.id, ids)
+        self.album = next((a for a in db.list_albums(self.conn) if a.id == self.album.id), None)
+        self.reload_grid()
+
+    def _update_album_actions(self) -> None:
+        idle = not self.scanning
+        has_selection = idle and self.grid.selected_count() > 0
+        self.add_to_album_action.setEnabled(has_selection)
+        self.remove_from_album_action.setEnabled(has_selection and self.album is not None)
+        self.manage_albums_action.setEnabled(idle)
+
+    def build_grid_menu(self) -> QMenu:
+        """The right-click menu of the grid for the current selection."""
+        menu = QMenu(self)
+        menu.addAction(self.add_to_album_action)
+        if self.album is not None:
+            menu.addAction(self.remove_from_album_action)
+        return menu
+
+    def _show_grid_menu(self, pos) -> None:
+        index = self.grid.index_at(pos)
+        if index is None:
+            return
+        if not self.grid.is_selected(index):
+            self.grid.click(index, Qt.KeyboardModifier.NoModifier)
+        menu = self.build_grid_menu()
+        menu.exec(self.grid.viewport().mapToGlobal(pos))
+        menu.deleteLater()
+
     def open_viewer(self, index: int) -> None:
         if not 0 <= index < len(self.photos):
             return  # not loaded yet
         self.pages.setCurrentIndex(PAGE_VIEWER)
+        self._update_bars()
         self.viewer.show_photo(self.photos, self.sources_by_id, index)
 
     def close_viewer(self, index: int) -> None:
         self.pages.setCurrentIndex(PAGE_GRID)
+        self._update_bars()
         self.grid.set_current_index(index)
         self.grid.setFocus()
 
@@ -326,6 +503,7 @@ class MainWindow(QMainWindow):
 
     def _sources_updated(self) -> None:
         self._load_sources()
+        self.filter_bar.refresh_options()  # may change the filter, which reloads the grid
         self.sources_changed.emit()
 
     def source_stats(self) -> dict[int, db.SourceStats]:
@@ -500,6 +678,7 @@ class MainWindow(QMainWindow):
         self.rescan_action.setEnabled(bool(self.sources) and idle)
         self.sources_action.setEnabled(bool(self.sources))
         self.empty.button.setEnabled(idle)
+        self._update_album_actions()
 
     def rescan(self) -> None:
         self.rescan_sources(self.sources)
