@@ -75,6 +75,20 @@ IMAGORY_LIBRARY=.bench-library uv run python scripts/bench.py .fake-library
 
 Results are recorded in [docs/v0-results.md](docs/v0-results.md).
 
+A synthetic Google Takeout export, with JSON sidecars using Takeout's naming quirks and a
+ground-truth `manifest.json`:
+
+```sh
+uv run python scripts/make_fake_library.py .fake-library-takeout --takeout --count 2000
+```
+
+The V1 grid prototype (100,000 in-memory items with month headers):
+
+```sh
+uv run python scripts/grid_prototype.py          # interactive window
+uv run python scripts/grid_prototype.py --bench  # print timings
+```
+
 ### Building the Windows executable
 
 Run on Windows (not WSL):
