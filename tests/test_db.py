@@ -95,10 +95,10 @@ def test_insert_creates_photo_and_grid_order(conn):
     db.insert_file(conn, src.id, _record("b.jpg", "2020-01-01T00:00:00"), now)
     db.insert_file(conn, src.id, _record("a.jpg", "2020-01-01T00:00:00"), now)
     newest = db.insert_file(conn, src.id, _record("c.jpg", "2021-05-05T00:00:00"), now)
-    grid = db.grid_photos(conn, src.id)
+    grid = db.grid_photos(conn)
     assert [p.relative_path for p in grid] == ["c.jpg", "a.jpg", "b.jpg"]
     db.mark_missing(conn, [newest])
-    assert [p.relative_path for p in db.grid_photos(conn, src.id)] == ["a.jpg", "b.jpg"]
+    assert [p.relative_path for p in db.grid_photos(conn)] == ["a.jpg", "b.jpg"]
 
 
 def test_delete_source_removes_rows(conn):
@@ -123,5 +123,64 @@ def test_grid_photos_paging(conn):
     now = db.utc_now()
     for i in range(5):
         db.insert_file(conn, src.id, _record(f"{i}.jpg", f"2020-01-0{i + 1}T00:00:00"), now)
-    full = db.grid_photos(conn, src.id)
-    assert db.grid_photos(conn, src.id, limit=2) + db.grid_photos(conn, src.id, offset=2) == full
+    full = db.grid_photos(conn)
+    assert db.grid_photos(conn, limit=2) + db.grid_photos(conn, offset=2) == full
+
+
+def test_source_create_list_rename_type_relocate(conn):
+    first = db.create_source(conn, "/photos", "Phone")
+    second = db.create_source(conn, "/takeout", "Account A", "takeout", type_overridden=True)
+    assert (first.type, first.type_overridden, first.last_scan_at) == ("plain", False, None)
+    assert first.added_at.endswith("Z")
+    assert (second.type, second.type_overridden) == ("takeout", True)
+    assert [s.id for s in db.list_sources(conn)] == [first.id, second.id]
+
+    db.rename_source(conn, first.id, "Phone backup")
+    db.set_source_type(conn, first.id, "takeout")
+    db.relocate_source(conn, first.id, "/mnt/e/photos")
+    moved = db.get_source(conn, first.id)
+    assert (moved.label, moved.type, moved.type_overridden) == ("Phone backup", "takeout", True)
+    assert moved.root_path == "/mnt/e/photos"
+    assert db.get_source(conn, 999) is None
+    with pytest.raises(ValueError):
+        db.set_source_type(conn, first.id, "zip")
+    with pytest.raises(ValueError):
+        db.create_source(conn, "/x", "x", "zip")
+
+
+def test_source_stats_and_sample_paths(conn):
+    src = db.create_source(conn, "/photos", "photos")
+    empty = db.create_source(conn, "/empty", "empty")
+    now = db.utc_now()
+    ids = [db.insert_file(conn, src.id, _record(f"{i}.jpg"), now) for i in range(3)]
+    db.mark_missing(conn, ids[:1])
+    stats = db.source_stats(conn)
+    assert stats[src.id] == db.SourceStats(photos=2, missing=1)
+    assert empty.id not in stats
+    assert db.source_file_paths(conn, src.id, 2) == ["0.jpg", "1.jpg"]
+
+
+def test_grid_spans_sources_with_path_then_source_ties(conn):
+    a = db.create_source(conn, "/a", "a")
+    b = db.create_source(conn, "/b", "b")
+    now = db.utc_now()
+    db.insert_file(conn, b.id, _record("x.jpg"), now)
+    db.insert_file(conn, a.id, _record("x.jpg"), now)
+    db.insert_file(conn, b.id, _record("new.jpg", "2024-01-01T00:00:00"), now)
+    grid = db.grid_photos(conn)
+    assert [(p.relative_path, p.source_id) for p in grid] == [
+        ("new.jpg", b.id),
+        ("x.jpg", a.id),
+        ("x.jpg", b.id),
+    ]
+
+
+def test_delete_source_keeps_other_sources(conn):
+    a = db.create_source(conn, "/a", "a")
+    b = db.create_source(conn, "/b", "b")
+    now = db.utc_now()
+    db.insert_file(conn, a.id, _record("x.jpg"), now)
+    db.insert_file(conn, b.id, _record("x.jpg"), now)
+    db.delete_source(conn, a.id)
+    assert [(p.source_id, p.relative_path) for p in db.grid_photos(conn)] == [(b.id, "x.jpg")]
+    assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 1

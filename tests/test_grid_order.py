@@ -7,7 +7,7 @@ from imagory.ui.grid import insertion_index, sorts_before
 
 
 def photo(pid: int, date: str | None, path: str) -> GridPhoto:
-    return GridPhoto(pid, path, None, None, None, date, None)
+    return GridPhoto(pid, 1, path, None, None, None, date, None)
 
 
 def test_insertion_matches_full_sort():

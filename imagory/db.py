@@ -189,35 +189,105 @@ def open_database(db_file: Path) -> sqlite3.Connection:
 # --- sources ----------------------------------------------------------------------------
 
 
+SOURCE_TYPES = ("plain", "takeout")
+_SOURCE_COLUMNS = "id, label, root_path, type, type_overridden, added_at, last_scan_at"
+
+
 @dataclass(frozen=True)
 class Source:
     id: int
     label: str
     root_path: str
+    type: str  # 'plain' | 'takeout'
+    type_overridden: bool  # the user chose a type other than the detected one
+    added_at: str
     last_scan_at: str | None
 
 
 def _source(row: sqlite3.Row) -> Source:
-    return Source(row["id"], row["label"], row["root_path"], row["last_scan_at"])
+    return Source(
+        row["id"],
+        row["label"],
+        row["root_path"],
+        row["type"],
+        bool(row["type_overridden"]),
+        row["added_at"],
+        row["last_scan_at"],
+    )
 
 
-def get_source(conn: sqlite3.Connection) -> Source | None:
-    """V0 has exactly one source; return it, or None before a folder is chosen."""
+def list_sources(conn: sqlite3.Connection) -> list[Source]:
+    """All sources in the order they were added."""
+    rows = conn.execute(f"SELECT {_SOURCE_COLUMNS} FROM sources ORDER BY added_at, id")
+    return [_source(r) for r in rows]
+
+
+def get_source(conn: sqlite3.Connection, source_id: int) -> Source | None:
     row = conn.execute(
-        "SELECT id, label, root_path, last_scan_at FROM sources ORDER BY id LIMIT 1"
+        f"SELECT {_SOURCE_COLUMNS} FROM sources WHERE id = ?", (source_id,)
     ).fetchone()
     return _source(row) if row else None
 
 
-def create_source(conn: sqlite3.Connection, root_path: str, label: str) -> Source:
+def create_source(
+    conn: sqlite3.Connection,
+    root_path: str,
+    label: str,
+    type: str = "plain",
+    type_overridden: bool = False,
+) -> Source:
+    if type not in SOURCE_TYPES:
+        raise ValueError(f"Unknown source type: {type}")
     cur = conn.execute(
-        "INSERT INTO sources (label, root_path, type, added_at) VALUES (?, ?, 'plain', ?)",
-        (label, root_path, utc_now()),
+        "INSERT INTO sources (label, root_path, type, type_overridden, added_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (label, root_path, type, int(type_overridden), utc_now()),
     )
-    row = conn.execute(
-        "SELECT id, label, root_path, last_scan_at FROM sources WHERE id = ?", (cur.lastrowid,)
-    ).fetchone()
-    return _source(row)
+    source = get_source(conn, cur.lastrowid)
+    assert source is not None
+    return source
+
+
+def rename_source(conn: sqlite3.Connection, source_id: int, label: str) -> None:
+    conn.execute("UPDATE sources SET label = ? WHERE id = ?", (label, source_id))
+
+
+def set_source_type(conn: sqlite3.Connection, source_id: int, type: str) -> None:
+    """Record a type the user chose, so it is not replaced by detection."""
+    if type not in SOURCE_TYPES:
+        raise ValueError(f"Unknown source type: {type}")
+    conn.execute("UPDATE sources SET type = ?, type_overridden = 1 WHERE id = ?", (type, source_id))
+
+
+def relocate_source(conn: sqlite3.Connection, source_id: int, root_path: str) -> None:
+    """Point a source at its new folder. Paths are relative, so nothing else changes."""
+    conn.execute("UPDATE sources SET root_path = ? WHERE id = ?", (root_path, source_id))
+
+
+@dataclass(frozen=True)
+class SourceStats:
+    photos: int = 0  # files present on disk at the last scan
+    missing: int = 0
+
+
+def source_stats(conn: sqlite3.Connection) -> dict[int, SourceStats]:
+    """File counts per source; sources without files are absent from the result."""
+    rows = conn.execute(
+        "SELECT source_id, SUM(status = 'ok'), SUM(status = 'missing') FROM files "
+        "GROUP BY source_id"
+    )
+    return {r[0]: SourceStats(r[1], r[2]) for r in rows}
+
+
+def source_file_paths(conn: sqlite3.Connection, source_id: int, limit: int) -> list[str]:
+    """A sample of a source's relative paths, e.g. to check a relocation target."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT relative_path FROM files WHERE source_id = ? ORDER BY id LIMIT ?",
+            (source_id, limit),
+        )
+    ]
 
 
 def delete_source(conn: sqlite3.Connection, source_id: int) -> None:
@@ -225,6 +295,7 @@ def delete_source(conn: sqlite3.Connection, source_id: int) -> None:
 
     Only ever called after the user confirms. Files on disk are not touched.
     """
+    # Albums (PRD §8.8) do not exist yet; their memberships must go with the photos here.
     with transaction(conn):
         photo_ids = [
             r[0]
@@ -424,6 +495,7 @@ def scan_runs(conn: sqlite3.Connection, source_id: int) -> list[sqlite3.Row]:
 class GridPhoto(NamedTuple):
     # A NamedTuple, not a dataclass: building 100,000 of them must stay fast.
     photo_id: int
+    source_id: int
     relative_path: str
     width: int | None
     height: int | None
@@ -433,21 +505,22 @@ class GridPhoto(NamedTuple):
 
 
 def grid_photos(
-    conn: sqlite3.Connection, source_id: int, limit: int | None = None, offset: int = 0
+    conn: sqlite3.Connection, limit: int | None = None, offset: int = 0
 ) -> list[GridPhoto]:
-    """Visible photos, newest first, ties broken by relative path. Missing files are hidden.
+    """Visible photos of all sources, newest first, ties broken by relative path, then
+    source. Missing files are hidden.
 
     ``limit`` and ``offset`` let the grid show its first screen before loading the rest.
     """
     cur = conn.cursor()
     cur.row_factory = None  # plain tuples are much cheaper than sqlite3.Row here
     cur.execute(
-        "SELECT p.id, f.relative_path, p.width, p.height, p.format, p.taken_at_local, "
+        "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
         # CROSS JOIN makes SQLite walk photos in taken_at_local order, so a LIMIT stops early.
-        "p.date_source FROM photos p CROSS JOIN files f ON f.id = p.primary_file_id "
-        "WHERE f.source_id = ? AND f.status = 'ok' "
-        "ORDER BY p.taken_at_local DESC, f.relative_path LIMIT ? OFFSET ?",
-        (source_id, -1 if limit is None else limit, offset),
+        "p.taken_at_local, p.date_source FROM photos p CROSS JOIN files f "
+        "ON f.id = p.primary_file_id WHERE f.status = 'ok' "
+        "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT ? OFFSET ?",
+        (-1 if limit is None else limit, offset),
     )
     return list(map(GridPhoto._make, cur))
 
@@ -460,8 +533,8 @@ def grid_photos_for_files(conn: sqlite3.Connection, file_ids: list[int]) -> list
     cur.row_factory = None
     placeholders = ",".join("?" * len(file_ids))
     cur.execute(
-        "SELECT p.id, f.relative_path, p.width, p.height, p.format, p.taken_at_local, "
-        "p.date_source FROM photos p JOIN files f ON f.id = p.primary_file_id "
+        "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
+        "p.taken_at_local, p.date_source FROM photos p JOIN files f ON f.id = p.primary_file_id "
         f"WHERE f.id IN ({placeholders}) AND f.status = 'ok'",
         file_ids,
     )

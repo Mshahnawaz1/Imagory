@@ -51,7 +51,8 @@ def format_date(taken_at_local: str | None) -> str:
 
 
 def sorts_before(a: GridPhoto, b: GridPhoto) -> bool:
-    """Grid order, as in ``db.grid_photos``: newest first, no date last, then by path."""
+    """Grid order, as in ``db.grid_photos``: newest first, no date last, then by path,
+    then by source."""
     if a.taken_at_local != b.taken_at_local:
         if a.taken_at_local is None:
             return False
@@ -60,7 +61,10 @@ def sorts_before(a: GridPhoto, b: GridPhoto) -> bool:
         return a.taken_at_local > b.taken_at_local
     # NOCASE in SQLite folds ASCII only; lower() can differ for other letters, and the
     # full reload after the scan settles any difference.
-    return a.relative_path.lower() < b.relative_path.lower()
+    a_path, b_path = a.relative_path.lower(), b.relative_path.lower()
+    if a_path != b_path:
+        return a_path < b_path
+    return a.source_id < b.source_id
 
 
 def insertion_index(photos: list[GridPhoto], photo: GridPhoto) -> int:
