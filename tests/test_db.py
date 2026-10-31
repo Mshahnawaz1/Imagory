@@ -41,17 +41,18 @@ def test_backup_before_migrating_existing_db(tmp_path, monkeypatch):
     db.set_setting(conn, "marker", "v1")
     conn.close()
 
-    def _migration_2(c):
+    def _extra_migration(c):
         c.execute("CREATE TABLE extra (x INTEGER)")
 
-    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, _migration_2])
-    monkeypatch.setattr(db, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, _extra_migration])
+    base = db.SCHEMA_VERSION
+    monkeypatch.setattr(db, "SCHEMA_VERSION", base + 1)
     conn = db.open_database(path)
-    assert db.schema_version(conn) == 2
+    assert db.schema_version(conn) == base + 1
     conn.close()
 
     backup = sqlite3.connect(tmp_path / "imagory.db.bak")
-    assert backup.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert backup.execute("PRAGMA user_version").fetchone()[0] == base
     assert backup.execute("SELECT value FROM settings WHERE key = 'marker'").fetchone()[0] == "v1"
     backup.close()
 
@@ -65,11 +66,12 @@ def test_failed_migration_rolls_back(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, _bad])
-    monkeypatch.setattr(db, "SCHEMA_VERSION", 2)
+    base = db.SCHEMA_VERSION
+    monkeypatch.setattr(db, "SCHEMA_VERSION", base + 1)
     with pytest.raises(RuntimeError):
         db.open_database(path)
     conn = db.connect(path)
-    assert db.schema_version(conn) == 1
+    assert db.schema_version(conn) == base
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert "half_done" not in names
 
