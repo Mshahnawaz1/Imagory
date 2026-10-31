@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self._show_grid_menu)
         self.viewer = PhotoViewer(self)
+        self.viewer.set_connection(self.conn)
         self.viewer.closed.connect(self.close_viewer)
         self.empty = EmptyPage(self.add_source_interactive, self)
 
@@ -463,9 +464,12 @@ class MainWindow(QMainWindow):
         self.remove_from_album_action.setEnabled(has_selection and self.album is not None)
         self.manage_albums_action.setEnabled(idle)
 
-    def build_grid_menu(self) -> QMenu:
+    def build_grid_menu(self, index: int | None = None) -> QMenu:
         """The right-click menu of the grid for the current selection."""
         menu = QMenu(self)
+        if index is not None:
+            menu.addAction("Open in viewer").triggered.connect(lambda: self.open_viewer(index))
+            menu.addSeparator()
         menu.addAction(self.add_to_album_action)
         if self.album is not None:
             menu.addAction(self.remove_from_album_action)
@@ -477,7 +481,7 @@ class MainWindow(QMainWindow):
             return
         if not self.grid.is_selected(index):
             self.grid.click(index, Qt.KeyboardModifier.NoModifier)
-        menu = self.build_grid_menu()
+        menu = self.build_grid_menu(index)
         menu.exec(self.grid.viewport().mapToGlobal(pos))
         menu.deleteLater()
 
