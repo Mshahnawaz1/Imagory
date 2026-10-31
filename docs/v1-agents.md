@@ -123,5 +123,5 @@ D's queries if trivial). Full tests and ruff after each merge; then PRD, README,
 | A | merged |
 | B | merged |
 | C | started |
-| D | started |
+| D | merged |
 | E | merged (296390e) |
