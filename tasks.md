@@ -3,24 +3,6 @@
 Scope and design are in `PRD.md`. A task is done only when it is implemented, tested, and
 committed. Completed work is listed at the end, one line per task.
 
-## In progress: V1 §8.1 Sources
-
-Branch `feat/v1-sources`. The code is committed; the PRD docs and the merge remain.
-
-- [x] Fix the intermittent UI test crash ("pure virtual method called"). See `docs/issues.md`, issue 1
-- [x] Commit the §8.1 work in focused commits:
-  - data: source type, rename, relocate, stats; grid spans all sources
-  - per-source thumbnail folders; the V0 cache is cleared once on startup
-  - Takeout type detection
-  - source checks, relocation check, remove source
-  - the scan thread scans several sources; an unavailable folder is reported
-  - UI: Add source and Sources dialogs, toolbar and menu, viewer shows the source label
-- [ ] Docs: PRD status line and §16 decisions for §8.1 (README and CLAUDE.md are updated, not committed)
-- [ ] Merge `main` into `feat/v1-sources`, retest, then merge into `main`
-- Deferred:
-  - recompute dates on type change (needs §8.3/§8.4 wiring)
-  - remove a source's album memberships (needs §8.8)
-
 ## Next: V1
 
 - [ ] §8.2 Missing files: moved-file detection by hash, a photo is missing only when all its files are, "Remove missing items" per source
@@ -60,3 +42,5 @@ Branch `feat/v1-sources`. The code is committed; the PRD docs and the merge rema
 - [x] §8.6 virtualized grid prototype with month headers, selection, and a 100k benchmark (`ui/photo_grid.py`)
 - [x] Synthetic Takeout export with all sidecar quirks and a ground-truth manifest (`make_fake_library.py --takeout`)
 - [x] PRD and README updated for the three items above
+- [x] §8.1 Sources: source type and detection, rename, relocate, remove, per-source thumbnails, multi-source scan, Add source and Sources dialogs, grid crash fix (`docs/issues.md` issue 1)
+  - deferred: recompute dates on type change (needs §8.3/§8.4 wiring); remove album memberships (needs §8.8)
