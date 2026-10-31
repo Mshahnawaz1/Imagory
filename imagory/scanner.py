@@ -17,9 +17,13 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from imagory import db
 from imagory.thumbs import FileJob, FileResult, fold_path, process_batch
+
+if TYPE_CHECKING:
+    from imagory.takeout import Sidecar
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +48,9 @@ class WalkResult:
     files: list[WalkedFile] = field(default_factory=list)
     skipped_by_ext: Counter[str] = field(default_factory=Counter)
     complete: bool = True
+    # Folder (relative, "" for the root) -> JSON file names in it. Filled only when the
+    # caller asks for it (Takeout sources need the sidecar names).
+    json_names: dict[str, list[str]] = field(default_factory=dict)
 
 
 def is_skipped_dir(name: str) -> bool:
@@ -63,11 +70,16 @@ def walk_source(
     root: Path | str,
     exclude: Path | str | None = None,
     cancelled: Callable[[], bool] = lambda: False,
+    *,
+    skip_dir: Callable[[str], bool] | None = None,
+    collect_json: bool = False,
 ) -> WalkResult:
     """List supported image files under ``root`` without opening any of them.
 
     Symlinks and junctions are never followed, hidden and system folders are skipped,
     and ``exclude`` (the library folder) is skipped if it lies inside the source.
+    ``skip_dir(relative_dir)`` skips further folders (Takeout's Trash). ``collect_json``
+    records the JSON file names of each folder in ``json_names``.
     """
     result = WalkResult()
     exclude_str = str(exclude) if exclude is not None else None
@@ -94,11 +106,15 @@ def walk_source(
                         continue
                     if exclude_str is not None and _same_path(entry.path, exclude_str):
                         continue
+                    if skip_dir is not None and skip_dir(rel):
+                        continue
                     subdirs.append((entry.path, rel))
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     continue
                 ext = extension_of(entry.name)
+                if collect_json and ext == ".json":
+                    result.json_names.setdefault(rel_dir, []).append(entry.name)
                 if ext not in SUPPORTED_EXTENSIONS:
                     result.skipped_by_ext[ext] += 1
                     continue
@@ -208,6 +224,10 @@ class Scanner:
         self._progress = progress or (lambda p: None)
         self._cancel = cancel_event or threading.Event()
         self._on_added = on_added
+        # Takeout: image path -> sidecar path (both relative to the source), and the
+        # sidecars read for files being processed (location is applied when storing).
+        self._sidecar_of: dict[str, str] = {}
+        self._sidecar_data: dict[str, Sidecar] = {}
 
     def cancel(self) -> None:
         """Stop queueing new work; in-flight results are still committed."""
@@ -251,12 +271,23 @@ class Scanner:
         if not root.is_dir():
             raise FileNotFoundError(f"Source folder not found: {root}")
         self._progress(Progress("walking"))
-        walk = walk_source(root, self.library_root, lambda: self.cancelled)
+        from imagory import takeout  # takeout imports this module, so import it late
+
+        is_takeout = self.source.type == "takeout"
+        walk = walk_source(
+            root,
+            self.library_root,
+            lambda: self.cancelled,
+            skip_dir=takeout.is_trash_dir if is_takeout else None,
+            collect_json=is_takeout,
+        )
         counts.found = len(walk.files)
         counts.skipped_by_ext = dict(sorted(walk.skipped_by_ext.items()))
         if not walk.complete:
             return "cancelled"
 
+        if is_takeout:
+            self._match_sidecars(root, walk)
         diff = diff_files(walk.files, db.load_file_states(self.conn, self.source.id))
         counts.unchanged = diff.unchanged
         counts.missing = len(diff.disappeared)
@@ -274,6 +305,44 @@ class Scanner:
             return "cancelled" if self.cancelled else "completed"
         self._process(jobs, counts, found=counts.found, disappeared=set(diff.disappeared))
         return "cancelled" if self.cancelled else "completed"
+
+    def _match_sidecars(self, root: Path, walk: WalkResult) -> None:
+        """Match every image of a Takeout source to its sidecar, folder by folder, and log the
+        matching report (PRD §8.3). Only names are used here; titles are read on demand."""
+        from imagory import takeout
+
+        by_dir: dict[str, list[str]] = {}
+        for f in walk.files:
+            rel_dir, _, name = f.relative_path.rpartition("/")
+            by_dir.setdefault(rel_dir, []).append(name)
+        report = takeout.MatchReport()
+        self._sidecar_of = {}
+        for rel_dir in sorted(set(by_dir) | set(walk.json_names)):
+            if self.cancelled:
+                return
+            folder = root.joinpath(*rel_dir.split("/")) if rel_dir else root
+            names = by_dir.get(rel_dir, []) + walk.json_names.get(rel_dir, [])
+            result = takeout.match_folder(folder, names)
+            report.add(rel_dir, result)
+            prefix = f"{rel_dir}/" if rel_dir else ""
+            for image, sidecar in result.matches.items():
+                if sidecar is not None:
+                    self._sidecar_of[prefix + image] = prefix + sidecar
+        takeout.log_match_report(report, log)
+
+    def _make_job(self, f: WalkedFile) -> FileJob:
+        """The worker job for a file; for Takeout, reads its sidecar for the taken time."""
+        from imagory import takeout
+
+        timestamp = None
+        sidecar_path = self._sidecar_of.get(f.relative_path)
+        if sidecar_path is not None:
+            path = Path(self.source.root_path).joinpath(*sidecar_path.split("/"))
+            sidecar = takeout.read_sidecar(path)
+            if sidecar is not None:
+                self._sidecar_data[f.relative_path] = sidecar
+                timestamp = sidecar.taken_timestamp
+        return FileJob(f.relative_path, f.size, f.modified_time, timestamp)
 
     def _process(
         self,
@@ -321,9 +390,7 @@ class Scanner:
                 if rows:
                     self._on_added(rows)
 
-        batches = _chunks(
-            [FileJob(f.relative_path, f.size, f.modified_time) for _, f in jobs], self.worker_batch
-        )
+        batches = self._batches([f for _, f in jobs])
         max_in_flight = self.workers * 2
         context = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(max_workers=self.workers, mp_context=context) as pool:
@@ -375,17 +442,23 @@ class Scanner:
             taken_at_utc=res.taken_at_utc,
             exif_taken_at=res.exif_taken_at,
             exif_offset=res.exif_offset,
+            sidecar_relative_path=self._sidecar_of.get(res.relative_path),
         )
+        sidecar = self._sidecar_data.pop(res.relative_path, None)
         if file_id is not None:
             db.update_file(self.conn, file_id, record, now)
-            return "updated", file_id
-        moved = db.find_moved_file(self.conn, self.source.id, res.content_hash)
-        if moved is not None:
-            db.update_file(self.conn, moved, record, now)
-            return "moved", moved
-        return "added", db.insert_file(self.conn, self.source.id, record, now)
+            outcome, stored = "updated", file_id
+        else:
+            moved = db.find_moved_file(self.conn, self.source.id, res.content_hash)
+            if moved is not None:
+                db.update_file(self.conn, moved, record, now)
+                outcome, stored = "moved", moved
+            else:
+                outcome, stored = "added", db.insert_file(self.conn, self.source.id, record, now)
+        if sidecar is not None:
+            db.set_photo_location(self.conn, stored, sidecar.latitude, sidecar.longitude)
+        return outcome, stored
 
-
-def _chunks(items: list[FileJob], size: int) -> Iterator[list[FileJob]]:
-    for start in range(0, len(items), size):
-        yield items[start : start + size]
+    def _batches(self, files: list[WalkedFile]) -> Iterator[list[FileJob]]:
+        for start in range(0, len(files), self.worker_batch):
+            yield [self._make_job(f) for f in files[start : start + self.worker_batch]]

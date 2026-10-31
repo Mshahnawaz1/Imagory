@@ -414,6 +414,12 @@ def read_title(path: Path | str) -> str | None:
     return sidecar.title if sidecar else None
 
 
+def match_folder(folder: Path | str, names: Iterable[str]) -> DirectoryMatch:
+    """``match_directory`` for a real folder: sidecar titles are read (read-only) on demand."""
+    base = Path(folder)
+    return match_directory(names, lambda json_name: read_title(base / json_name))
+
+
 # --- matching report ----------------------------------------------------------------------
 
 
