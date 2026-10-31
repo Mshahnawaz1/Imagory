@@ -29,6 +29,9 @@ class ListSource:
     def tooltip(self, index):
         return f"tip {index}"
 
+    def caption(self, index):
+        return f"IMG_{index:06d}_with_a_rather_long_name.jpg"
+
 
 class RecordingProvider(ThumbnailProvider):
     def __init__(self):
@@ -219,3 +222,45 @@ def test_pooled_provider_loads_off_thread_and_repaints(qtbot, grid):
     assert provider.thumbnail(2, "item-2") is provider._broken
     paint(grid)
     assert len(loaded) == 5  # cached: nothing loads twice
+
+
+def test_captions_make_cells_taller_than_wide(grid):
+    assert grid.caption_height > 0
+    grid.set_data_source(ListSource([((2020, 1), 50)]))
+    r = grid.grid_layout.item_rect(0)
+    assert r.height == r.width + grid.caption_height
+    grid.set_provider(RecordingProvider())
+    paint(grid)  # captions are elided and drawn without error
+    # the caption strip belongs to the cell for hit-testing
+    pos = grid.visual_rect(0).center()
+    assert grid.index_at(pos) == 0
+
+
+def test_thumbnail_size_levels_keep_current_in_view(grid):
+    grid.set_provider(RecordingProvider())
+    grid.set_data_source(big_source())
+    assert grid.thumbnail_size == "medium"
+    medium = grid.grid_layout.cell_size
+    grid.set_current_index(50_000)
+    for level in ("large", "small", "medium"):
+        grid.set_thumbnail_size(level)
+        assert grid.thumbnail_size == level
+        rect = grid.visual_rect(50_000)
+        assert rect.top() >= 0 and rect.bottom() <= grid.viewport().height()
+        paint(grid)
+    assert grid.grid_layout.cell_size == medium
+    grid.set_thumbnail_size("large")
+    assert grid.grid_layout.cell_size > medium
+    with pytest.raises(ValueError):
+        grid.set_thumbnail_size("huge")
+
+
+def test_selection_colour_defaults_to_highlight(grid):
+    from PySide6.QtGui import QPalette
+
+    assert grid.selection_colour == grid.palette().color(QPalette.ColorRole.Highlight)
+    grid.set_provider(RecordingProvider())
+    grid.set_data_source(ListSource([((2020, 1), 5)]))
+    grid.click(1, Qt.KeyboardModifier.NoModifier)
+    grid.selection_colour = QColor("red")
+    paint(grid)

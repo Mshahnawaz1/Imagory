@@ -177,3 +177,27 @@ def test_100k_items_is_cheap():
         list(layout.visible_cells(y, y + 800))
     assert layout.count == 100_000
     assert time.perf_counter() - started < 1.0
+
+
+def test_caption_height_separates_row_and_column_pitch():
+    cap = 20
+    layout = GridLayout(build_sections([((2020, 1), 7), ((2019, 1), 4)]), 340, CELL, GAP, HEAD, cap)
+    assert layout.columns == 3
+    assert layout.row_pitch == CELL + cap + GAP
+    r4 = layout.item_rect(4)  # row 1, col 1
+    assert r4 == Rect(10 + PITCH, HEAD + layout.row_pitch, CELL, CELL + cap)
+    # the caption strip hits; the gap below the cell does not
+    assert layout.item_at(r4.x + 5, r4.y + CELL + cap - 1) == 4
+    assert layout.item_at(r4.x + 5, r4.y + CELL + cap) is None
+    assert layout.section_top(1) == HEAD + 3 * layout.row_pitch
+    # visible band covering only row 1 yields exactly row 1 (cells reach into the caption)
+    band_top = r4.y + CELL + cap - 1
+    vis = layout.visible(band_top, band_top + 1)
+    assert (vis.first_item, vis.end_item) == (3, 6)
+    cells = dict(layout.visible_cells(0, layout.height))
+    assert len(cells) == 11 and cells[4] == r4
+    # anchors round-trip through a reflow
+    a = layout.anchor(r4.y + 7)
+    layout.reflow(450)
+    layout.reflow(340)
+    assert layout.anchor_y(a) == r4.y + 7

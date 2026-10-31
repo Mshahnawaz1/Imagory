@@ -310,6 +310,10 @@ class PhotoDataSource(QObject):
     def item(self, index: int) -> GridPhoto | None:
         return self.photos[index] if 0 <= index < len(self.photos) else None
 
+    def caption(self, index: int) -> str:
+        photo = self.item(index)
+        return display_name(photo) if photo is not None else ""
+
     def tooltip(self, index: int) -> str:
         photo = self.item(index)
         if photo is None:
