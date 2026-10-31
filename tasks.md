@@ -44,7 +44,7 @@ Waves 1 and 2 are merged. Remaining V1 work:
   - §8.8 albums schema (migration 2), queries, Albums and Add-to-album dialogs (not yet in the main window)
 - [x] Wave 2 (three parallel agents, branches merged into `main`):
   - §8.3/§8.4 Takeout in the scan: sidecars matched per folder, Trash skipped, takeout timestamp and photo location stored, edited copies inherit date and location, matching report logged
-  - §8.1/§8.4 `sources.change_source_type` recomputes dates (no UI calls it yet)
+  - §8.1/§8.4 `sources.change_source_type` recomputes dates; "Change type…" in the Sources dialog uses it (atomic, warns if a Takeout folder is unavailable)
   - §8.7 filter bar wired into the main window; filtered count in the status bar
   - §8.8 Albums menu, "Add to album" (toolbar and right-click), album view, "Remove from album", disabled during scans
   - §8.6 viewer zoom/pan, info panel, Show in Explorer, "Open in viewer" in the right-click menu

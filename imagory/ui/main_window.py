@@ -595,14 +595,41 @@ class MainWindow(QMainWindow):
             db.SOURCE_TYPES.index(source.type),
             False,
         )
-        if ok:
-            self.change_source_type(source.id, db.SOURCE_TYPES[names.index(chosen)])
+        if not ok:
+            return
+        source_type = db.SOURCE_TYPES[names.index(chosen)]
+        if source_type == source.type and source.type_overridden:
+            return
+        try:
+            changed = self.change_source_type(source.id, source_type)
+        except FileNotFoundError:
+            QMessageBox.warning(
+                self,
+                "Change source type",
+                f"The folder of “{source.label}” is not available:\n{source.root_path}\n\n"
+                "Imagory needs it to read the Takeout information. Connect the drive, or "
+                "relocate the source, and try again. Nothing was changed.",
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Change source type",
+            f"“{source.label}” is now {TYPE_NAMES[source_type]}. "
+            f"Dates changed for {changed:,} file{'' if changed == 1 else 's'}.",
+        )
 
-    def change_source_type(self, source_id: int, source_type: str) -> None:
-        # Dates do not depend on the type until Takeout dates exist (PRD §8.3, §8.4); the
-        # recompute for this source belongs here then.
-        db.set_source_type(self.conn, source_id, source_type)
+    def change_source_type(self, source_id: int, source_type: str) -> int:
+        """Set the type and recompute the source's dates (PRD §8.1). Returns how many files'
+        dates changed. Raises ``FileNotFoundError`` when a Takeout source's folder is gone,
+        and then nothing changes."""
+        assert not self.scanning  # the scan thread is the only writer while it runs
+        changed = sources.change_source_type(self.conn, source_id, source_type)
         self._sources_updated()
+        if changed:
+            # Dates decide the order and the month headers; an open viewer stays on its
+            # photo and is rebound to the reloaded list.
+            self.reload_grid()
+        return changed
 
     def relocate_source_interactive(self, source: db.Source) -> None:
         if self.scanning:

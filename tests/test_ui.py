@@ -182,6 +182,53 @@ def test_rename_and_change_type(qtbot, photos, no_dialogs):
     conn.close()
 
 
+def test_change_type_recomputes_dates_and_reorders_grid(qtbot, tmp_path, no_dialogs, monkeypatch):
+    import shutil
+
+    from PySide6.QtWidgets import QInputDialog
+
+    from tests.test_date_recompute import make_source
+    from tests.test_scan import snapshot
+
+    src_dir = make_source(tmp_path)
+    before = snapshot(src_dir)
+    window, conn = open_window(qtbot)
+    source = window.add_source(src_dir, source_type="plain")
+    wait_scan(qtbot, window)
+
+    def dates():
+        return {p.relative_path.rsplit("/", 1)[-1]: p.date_source for p in window.photos}
+
+    assert dates() == {
+        "IMG_9.jpg": "exif",
+        "IMG_20170305_101500.jpg": "filename",
+        "IMG_1.jpg": "mtime",
+    }
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: (mw.TYPE_NAMES["takeout"], True))
+    window.change_type_interactive(window.sources_by_id[source.id])
+    assert no_dialogs[-1][0] == "Change source type" and "2 files" in no_dialogs[-1][1]
+    assert window.sources_by_id[source.id].type == "takeout"
+    # Both sidecar dates are 2018-06-15, newer than the 2017 filename date: grid reordered.
+    assert dates() == {
+        "IMG_1.jpg": "takeout_json",
+        "IMG_9.jpg": "takeout_json",
+        "IMG_20170305_101500.jpg": "filename",
+    }
+    assert window.photos[-1].relative_path.endswith("IMG_20170305_101500.jpg")
+    assert snapshot(src_dir) == before
+
+    # Back to plain, then to Takeout with the folder unplugged: warned, nothing changes.
+    window.change_source_type(source.id, "plain")
+    shutil.rmtree(src_dir)
+    window.change_type_interactive(window.sources_by_id[source.id])
+    assert no_dialogs[-1][0] == "Change source type" and "not available" in no_dialogs[-1][1]
+    assert window.sources_by_id[source.id].type == "plain"
+    assert dates()["IMG_9.jpg"] == "exif"
+    window.close()
+    conn.close()
+
+
 def test_sources_dialog_lists_sources(qtbot, photos, no_dialogs):
     from imagory.ui.sources_dialog import SourcesDialog
 
