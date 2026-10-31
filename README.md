@@ -51,6 +51,9 @@ The library folder is `%LOCALAPPDATA%\Imagory\` and contains `imagory.db` (the d
 folder** opens the logs, for example to attach them to a GitHub issue. Logs are never sent
 anywhere.
 
+A library created by the early V0 test build is not carried over: Imagory starts with an
+empty library and you add your folders again. Your photos are not affected.
+
 ### Windows SmartScreen and antivirus warnings
 
 Imagory releases are not code-signed, so Windows SmartScreen may say "Windows protected

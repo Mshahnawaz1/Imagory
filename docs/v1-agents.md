@@ -8,7 +8,7 @@ Five agents work in parallel, each on its own branch in its own git worktree. Th
 
 | Agent | Task | PRD | Branch | Model |
 | --- | --- | --- | --- | --- |
-| A | Duplicates, photo identity, moved and missing files, date wiring | §8.5, §8.2, §8.4 | `feat/v1-duplicates` | Opus (cross-cutting, migration of V0 data) |
+| A | Duplicates, photo identity, moved and missing files, date wiring | §8.5, §8.2, §8.4 | `feat/v1-duplicates` | Opus (cross-cutting, scanner and schema) |
 | B | Takeout sidecar matching, reading, and matching report (pure layer) | §8.3 | `feat/v1-takeout-sidecars` | Sonnet |
 | C | Grid integration: `PhotoGrid` replaces `PhotoGridView` | §8.6 grid | `feat/v1-grid-integration` | Opus (UI integration, crash history) |
 | D | Search and filters: query layer and filter bar widget | §8.7 | `feat/v1-search` | Sonnet |
@@ -127,3 +127,8 @@ D's queries if trivial). Full tests and ruff after each merge; then PRD, README,
 | E | merged (296390e) |
 
 Wave 1 is complete: all five branches merged into `main` (328 tests pass). Wave 2 is listed in `tasks.md`.
+
+After the merges, the five `feat/v1-*` branches, the `feat/v1-sources` branch and the agent
+worktrees were deleted. The git history on `main` keeps the work. One later change: V0
+databases (schema version below 3) are replaced with a fresh database instead of being
+migrated, so the V0 upgrade work described for agent A was removed (PRD section 9).
