@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from imagory import dates, db, takeout, thumbs
@@ -125,9 +125,19 @@ def recompute_dates(conn: sqlite3.Connection, source: db.Source) -> int:
 
     For a Takeout source the sidecars are matched again from the folders on disk (read
     only). A folder that cannot be read keeps the sidecar path stored earlier. Photos are
-    not re-read, and Trash files already imported stay. The caller commits; the database is
-    only written when everything was computed, so a failure changes nothing.
+    not re-read, and Trash files already imported stay. The database is only written when
+    everything was computed, so a failure changes nothing.
     """
+    updates = _compute_dates(conn, source)
+    with db.transaction(conn):
+        changed = db.apply_recomputed_dates(conn, source.id, updates)
+    log.info("Source %d: recomputed dates as %s, %d changed", source.id, source.type, changed)
+    return changed
+
+
+def _compute_dates(conn: sqlite3.Connection, source: db.Source) -> list[db.RecomputedDate]:
+    """The recomputed date of every file of ``source``, as its type says. Reads only.
+    Raises ``FileNotFoundError`` for a Takeout source whose folder is unavailable."""
     is_takeout = source.type == "takeout"
     root = Path(source.root_path)
     if is_takeout and not root.is_dir():
@@ -178,18 +188,24 @@ def recompute_dates(conn: sqlite3.Connection, source: db.Source) -> int:
                 sidecar.longitude if sidecar else None,
             )
         )
-    with db.transaction(conn):
-        changed = db.apply_recomputed_dates(conn, source.id, updates)
-    log.info("Source %d: recomputed dates as %s, %d changed", source.id, source.type, changed)
-    return changed
+    return updates
 
 
 def change_source_type(conn: sqlite3.Connection, source_id: int, type: str) -> int:
-    """Set a source's type (the user's choice) and recompute its dates. Returns how many
-    files' dates changed. Run it on the thread that owns the connection, never during a
-    scan of the same library."""
-    with db.transaction(conn):
-        db.set_source_type(conn, source_id, type)
+    """Set a source's type (the user's choice) and recompute its dates, in one transaction.
+    Returns how many files' dates changed. Run it on the thread that owns the connection,
+    never during a scan of the same library.
+
+    Raises ``FileNotFoundError`` when the new type is Takeout and the source folder is
+    unavailable; the type and the dates then stay as they were.
+    """
+    if type not in db.SOURCE_TYPES:
+        raise ValueError(f"Unknown source type: {type}")
     source = db.get_source(conn, source_id)
     assert source is not None
-    return recompute_dates(conn, source)
+    updates = _compute_dates(conn, replace(source, type=type))
+    with db.transaction(conn):
+        db.set_source_type(conn, source_id, type)
+        changed = db.apply_recomputed_dates(conn, source_id, updates)
+    log.info("Source %d: type set to %s, %d dates changed", source_id, type, changed)
+    return changed
