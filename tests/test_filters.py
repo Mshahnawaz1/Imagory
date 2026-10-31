@@ -399,3 +399,52 @@ def test_bar_refresh_keeps_checked_sources(bar):
     assert bar.filter().source_ids == frozenset({2})
     bar.set_providers(sources=lambda: [(3, "New")])
     assert bar.filter() == PhotoFilter()
+
+
+# --- album filter and the real scanner -----------------------------------------------------
+
+
+def test_album_filter(conn, lib):
+    album = db.create_album(conn, "Trip")
+    other = db.create_album(conn, "Empty")
+    db.add_photos_to_album(conn, album, [lib["beach"], lib["dup"], lib["alone_missing"]])
+    assert pids(conn, PhotoFilter(album_id=album)) == {lib["beach"], lib["dup"]}
+    assert pids(conn, PhotoFilter(album_id=other)) == set()
+    assert pids(conn, PhotoFilter(album_id=album, missing=True)) == {lib["alone_missing"]}
+    f = PhotoFilter(album_id=album, has_duplicates=True)
+    assert pids(conn, f) == {lib["dup"]}
+    rows = db.filtered_grid_photos(conn, PhotoFilter(album_id=album))
+    assert rows == db.album_grid_photos(conn, album)
+    counts = db.filtered_month_counts(conn, PhotoFilter(album_id=album))
+    assert counts == db.album_month_counts(conn, album)
+
+
+def test_real_scan_with_duplicates_and_missing(tmp_path):
+    from imagory import paths
+    from imagory.scanner import Scanner
+    from tests.imaging import make_image
+
+    root = paths.ensure_library_dir()
+    c = db.open_database(paths.db_path(root))
+    a, b = tmp_path / "a", tmp_path / "b"
+    img = make_image(a / "Trip" / "x.jpg", (40, 30), taken="2020:05:05 10:00:00")
+    (b / "Copy").mkdir(parents=True)
+    (b / "Copy" / "x.jpg").write_bytes(img.read_bytes())
+    make_image(a / "y.jpg", (30, 40), taken="2021:01:01 10:00:00")
+    make_image(a / "gone.jpg", (20, 20), taken="2019:01:01 10:00:00")
+    sa = db.create_source(c, str(a), "A")
+    sb = db.create_source(c, str(b), "B")
+    for s in (sa, sb):
+        Scanner(c, s, paths.thumbs_dir(root), root, workers=2).run()
+    (a / "gone.jpg").unlink()
+    Scanner(c, sa, paths.thumbs_dir(root), root, workers=2).run()
+
+    assert db.filtered_grid_photos(c, PhotoFilter()) == db.grid_photos(c)
+    assert len(db.grid_photos(c)) == 2
+    assert db.filtered_month_counts(c, PhotoFilter()) == [("2021-01", 1), ("2020-05", 1)]
+    dup = db.filtered_grid_photos(c, PhotoFilter(has_duplicates=True))
+    assert [r.relative_path for r in dup] == ["Trip/x.jpg"]
+    gone = db.filtered_grid_photos(c, PhotoFilter(missing=True))
+    assert [r.relative_path for r in gone] == ["gone.jpg"]
+    assert db.filtered_count(c, PhotoFilter(folder=(sb.id, "copy"))) == 1
+    c.close()

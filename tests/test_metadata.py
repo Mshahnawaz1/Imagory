@@ -1,5 +1,4 @@
 import os
-from datetime import datetime
 
 from PIL import Image
 
@@ -13,16 +12,6 @@ def test_parse_exif_datetime():
     assert metadata.parse_exif_datetime("0000:00:00 00:00:00") is None
     assert metadata.parse_exif_datetime("    :  :     :  :  ") is None
     assert metadata.parse_exif_datetime(None) is None
-
-
-def test_date_fallback_prefers_exif():
-    assert metadata.best_date("2019-01-31T23:59:59", 0) == ("2019-01-31T23:59:59", "exif")
-
-
-def test_date_fallback_uses_local_mtime():
-    ns = 1_600_000_000_123_456_789
-    expected = datetime.fromtimestamp(1_600_000_000).isoformat(timespec="seconds")
-    assert metadata.best_date(None, ns) == (expected, "mtime")
 
 
 def _job(path, root):
@@ -39,7 +28,9 @@ def test_process_file_with_exif_and_orientation(tmp_path):
     assert (result.width, result.height) == (400, 800)  # rotated 90 degrees
     assert result.format == "JPEG"
     assert (result.taken_at_local, result.date_source) == ("2019-01-31T23:59:59", "exif")
-    thumb = thumbs.thumb_path(tmp_path / "thumbs", "a.jpg")
+    assert result.content_hash == thumbs.hash_bytes(img.read_bytes())
+    assert len(result.content_hash) == 32  # 128-bit BLAKE2b
+    thumb = thumbs.thumb_path(tmp_path / "thumbs", result.content_hash)
     with Image.open(thumb) as t:
         assert t.size == (160, 320)  # portrait after orientation, 320 px longest edge
         assert t.format == "JPEG"
@@ -54,7 +45,7 @@ def test_process_file_without_exif_uses_mtime(tmp_path):
     assert result.date_source == "mtime"
     assert result.taken_at_local == metadata.mtime_to_local(1_500_000_000_000_000_000)
     assert (result.width, result.height, result.format) == (100, 50, "PNG")
-    with Image.open(thumbs.thumb_path(tmp_path / "thumbs", "sub/b.png")) as t:
+    with Image.open(thumbs.thumb_path(tmp_path / "thumbs", result.content_hash)) as t:
         assert t.size == (100, 50)  # never upscaled
 
 
@@ -74,26 +65,64 @@ def test_corrupt_file_returns_error(tmp_path):
     bad.write_bytes(b"not really a jpeg")
     result = thumbs.process_file(str(src), str(tmp_path / "thumbs"), _job(bad, src))
     assert result.error
-    assert not thumbs.thumb_path(tmp_path / "thumbs", "bad.jpg").exists()
+    assert not (tmp_path / "thumbs").exists()
 
 
-def test_thumb_path_layout_and_case_folding(tmp_path):
-    p = thumbs.thumb_path(tmp_path, "Folder/IMG.JPG")
-    key = p.stem
-    assert p == tmp_path / key[:2] / key[2:4] / f"{key}.jpg"
-    assert thumbs.thumb_path(tmp_path, "folder/img.jpg") == p
+def test_thumb_path_layout_is_keyed_by_content_hash(tmp_path):
+    key = thumbs.hash_bytes(b"photo bytes")
+    assert thumbs.thumb_path(tmp_path, key) == tmp_path / key[:2] / key[2:4] / f"{key}.jpg"
+    assert thumbs.hash_bytes(b"photo bytes") == key != thumbs.hash_bytes(b"other bytes")
+
+
+def test_existing_thumbnail_of_a_copy_is_reused(tmp_path):
+    src = tmp_path / "src"
+    a = make_image(src / "a.jpg", (500, 500))
+    (src / "copy.jpg").write_bytes(a.read_bytes())
+    cache = tmp_path / "thumbs"
+    first = thumbs.process_file(str(src), str(cache), _job(a, src))
+    thumb = thumbs.thumb_path(cache, first.content_hash)
+    thumb.write_bytes(b"marker")  # would be overwritten if regenerated
+    second = thumbs.process_file(str(src), str(cache), _job(src / "copy.jpg", src))
+    assert second.content_hash == first.content_hash and second.error is None
+    assert thumb.read_bytes() == b"marker"
+
+
+def test_process_file_dates_from_filename_and_exif_offset(tmp_path):
+    src = tmp_path / "src"
+    named = make_image(src / "IMG_20190131_235959.jpg")
+    result = thumbs.process_file(str(src), str(tmp_path / "thumbs"), _job(named, src))
+    assert (result.taken_at_local, result.taken_at_utc, result.date_source) == (
+        "2019-01-31T23:59:59",
+        None,
+        "filename",
+    )
+    exif = Image.Exif()
+    exif.get_ifd(0x8769)[0x9003] = "2020:06:01 12:00:00"
+    exif.get_ifd(0x8769)[0x9011] = "+02:00"
+    Image.new("RGB", (20, 20)).save(src / "zoned.jpg", exif=exif.tobytes())
+    result = thumbs.process_file(str(src), str(tmp_path / "thumbs"), _job(src / "zoned.jpg", src))
+    assert (result.taken_at_local, result.taken_at_utc, result.date_source) == (
+        "2020-06-01T12:00:00",
+        "2020-06-01T10:00:00Z",
+        "exif",
+    )
+    assert (result.exif_taken_at, result.exif_offset) == ("2020-06-01T12:00:00", "+02:00")
 
 
 def test_ensure_thumbnail_regenerates(tmp_path):
     src = tmp_path / "src"
     make_image(src / "a.jpg", (500, 500))
     cache = tmp_path / "thumbs"
-    first = thumbs.ensure_thumbnail(src, cache, "a.jpg")
-    assert first and first.exists()
+    key = thumbs.hash_bytes((src / "a.jpg").read_bytes())
+    first = thumbs.ensure_thumbnail(src, cache, "a.jpg", key)
+    assert first == thumbs.thumb_path(cache, key) and first.exists()
     thumbs.clear_thumbs(cache)
     assert not first.exists()
-    again = thumbs.ensure_thumbnail(src, cache, "a.jpg")
+    again = thumbs.ensure_thumbnail(src, cache, "a.jpg", key)
     assert again == first and again.exists()
+    # A V0 row without a hash yet: the file is hashed to find its thumbnail.
+    thumbs.clear_thumbs(cache)
+    assert thumbs.ensure_thumbnail(src, cache, "a.jpg", None) == first and first.exists()
 
 
 def test_fit_within():
@@ -107,5 +136,5 @@ def test_large_jpeg_thumbnail_uses_draft(tmp_path):
     img = make_image(src / "big.jpg", (4000, 3000))
     result = thumbs.process_file(str(src), str(tmp_path / "thumbs"), _job(img, src))
     assert (result.width, result.height) == (4000, 3000)  # original size, not draft size
-    with Image.open(thumbs.thumb_path(tmp_path / "thumbs", "big.jpg")) as t:
+    with Image.open(thumbs.thumb_path(tmp_path / "thumbs", result.content_hash)) as t:
         assert t.size == (320, 240)

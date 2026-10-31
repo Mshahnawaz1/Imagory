@@ -12,19 +12,21 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from imagory import metadata
+from imagory import dates, metadata
 
 log = logging.getLogger(__name__)
 
 THUMB_SIZE = 320
 THUMB_QUALITY = 85
 # Version of the cache layout below; a different stored value means the cache is cleared.
-LAYOUT_VERSION = "2"
+LAYOUT_VERSION = "3"  # 3: keyed by content hash, shared across sources
+HASH_BYTES = 16
 # Large panoramas are legitimate photos; keep a limit against decompression bombs.
 Image.MAX_IMAGE_PIXELS = 300_000_000
 
@@ -49,23 +51,17 @@ def fold_path(relative_path: str) -> str:
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
-def source_thumbs_dir(thumbs_root: Path, source_id: int) -> Path:
-    """Each source's thumbnails live in their own folder, so two sources with the same
-    relative path never share one, and removing a source removes one folder.
+def hash_bytes(data: bytes) -> str:
+    """A file's content hash: BLAKE2b of the full contents, 128-bit, as 32 hex digits.
 
-    Interim layout until thumbnails are keyed by content hash (PRD §8.5).
+    This is the photo's identity (PRD §8.5) and its thumbnail key.
     """
-    return thumbs_root / f"source-{source_id}"
+    return hashlib.blake2b(data, digest_size=HASH_BYTES).hexdigest()
 
 
-def thumb_key(relative_path: str) -> str:
-    """BLAKE2b of the case-folded relative path, within a source's folder."""
-    return hashlib.blake2b(fold_path(relative_path).encode("utf-8"), digest_size=16).hexdigest()
-
-
-def thumb_path(thumbs_root: Path, relative_path: str) -> Path:
-    key = thumb_key(relative_path)
-    return thumbs_root / key[0:2] / key[2:4] / f"{key}.jpg"
+def thumb_path(thumbs_root: Path, content_hash: str) -> Path:
+    """``thumbs/ab/cd/<hash>.jpg``, shared by every copy of a photo in every source."""
+    return thumbs_root / content_hash[0:2] / content_hash[2:4] / f"{content_hash}.jpg"
 
 
 def clear_thumbs(thumbs_root: Path) -> None:
@@ -75,15 +71,14 @@ def clear_thumbs(thumbs_root: Path) -> None:
     thumbs_root.mkdir(parents=True, exist_ok=True)
 
 
-def remove_source_thumbs(thumbs_root: Path, source_id: int) -> None:
-    """Delete one source's thumbnails. Leftovers are only disk space, so errors are logged."""
-    folder = source_thumbs_dir(thumbs_root, source_id)
-    if folder.exists():
-        shutil.rmtree(folder, onexc=_log_rmtree_error)
-
-
-def _log_rmtree_error(func, path, exc: BaseException) -> None:
-    log.warning("Could not delete thumbnail %s: %s", path, exc)
+def remove_thumbnails(thumbs_root: Path, hashes: Iterable[str]) -> None:
+    """Delete the thumbnails of photos being removed. Leftovers are only disk space, so
+    errors are logged; empty ``ab/cd`` folders are left in place."""
+    for content_hash in hashes:
+        try:
+            thumb_path(thumbs_root, content_hash).unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("Could not delete thumbnail %s: %s", content_hash, exc)
 
 
 def _to_rgb(img: Image.Image) -> Image.Image:
@@ -143,6 +138,9 @@ class FileJob:
     relative_path: str
     size: int
     modified_time: int
+    # Takeout JSON ``photoTakenTime.timestamp`` (Unix seconds), filled in by the
+    # coordinator from the matched sidecar for Takeout sources (wave 2). None for now.
+    takeout_timestamp: int | None = None
 
 
 @dataclass(frozen=True)
@@ -158,10 +156,17 @@ class FileResult:
     taken_at_local: str = ""
     date_source: str = ""
     error: str | None = None
+    content_hash: str = ""
+    taken_at_utc: str | None = None
+    exif_taken_at: str | None = None
+    exif_offset: str | None = None
 
 
-def process_file(source_root: str, thumbs_root: str, job: FileJob) -> FileResult:
-    """Read metadata and write the thumbnail from a single read of the file.
+def process_file(
+    source_root: str, thumbs_root: str, job: FileJob, source_type: str = "plain"
+) -> FileResult:
+    """Hash the file, read its metadata and best date, and write its thumbnail (unless
+    a copy with the same contents already has one), all from a single read of the file.
 
     Never raises for a bad image: the error is returned in the result instead.
     The source file is only ever opened for reading.
@@ -171,16 +176,26 @@ def process_file(source_root: str, thumbs_root: str, job: FileJob) -> FileResult
     try:
         with open(path, "rb") as fh:
             data = fh.read()
+        content_hash = hash_bytes(data)
         with Image.open(io.BytesIO(data)) as img:
             fmt = img.format or ""
-            taken_exif, orientation = metadata.read_exif(img)
-            width, height = metadata.displayed_size(img.size, orientation)
-            make_thumbnail(img, thumb_path(Path(thumbs_root), job.relative_path))
+            exif = metadata.read_exif(img)
+            width, height = metadata.displayed_size(img.size, exif.orientation)
+            dest = thumb_path(Path(thumbs_root), content_hash)
+            if not dest.exists():
+                make_thumbnail(img, dest)
+        date = dates.resolve_date(
+            source_type,
+            mtime_ns=job.modified_time,
+            takeout_timestamp=job.takeout_timestamp,
+            exif_datetime=exif.taken,
+            exif_offset=exif.offset,
+            filename=job.relative_path.rsplit("/", 1)[-1],
+        )
     except Exception as exc:  # one bad image must never stop a scan
         return FileResult(
             job.relative_path, job.size, job.modified_time, error=f"{type(exc).__name__}: {exc}"
         )
-    taken, source = metadata.best_date(taken_exif, job.modified_time)
     return FileResult(
         job.relative_path,
         job.size,
@@ -188,26 +203,44 @@ def process_file(source_root: str, thumbs_root: str, job: FileJob) -> FileResult
         width=width,
         height=height,
         format=fmt,
-        taken_at_local=taken,
-        date_source=source,
+        taken_at_local=date.taken_at_local,
+        date_source=date.date_source,
+        content_hash=content_hash,
+        taken_at_utc=date.taken_at_utc,
+        exif_taken_at=exif.taken,
+        exif_offset=exif.offset,
     )
 
 
-def process_batch(source_root: str, thumbs_root: str, jobs: list[FileJob]) -> list[FileResult]:
+def process_batch(
+    source_root: str, thumbs_root: str, jobs: list[FileJob], source_type: str = "plain"
+) -> list[FileResult]:
     """Worker-pool entry point: process several files per task to cut IPC overhead."""
-    return [process_file(source_root, thumbs_root, job) for job in jobs]
+    return [process_file(source_root, thumbs_root, job, source_type) for job in jobs]
 
 
-def ensure_thumbnail(source_root: Path, thumbs_root: Path, relative_path: str) -> Path | None:
-    """Return the cached thumbnail, regenerating it from the source file if it is missing."""
-    dest = thumb_path(thumbs_root, relative_path)
-    if dest.exists():
-        return dest
+def ensure_thumbnail(
+    source_root: Path, thumbs_root: Path, relative_path: str, content_hash: str | None
+) -> Path | None:
+    """Find a photo's cached thumbnail from what a ``GridPhoto`` carries, regenerating it
+    from the source file if it is missing.
+
+    ``content_hash`` None is a V0 row not rescanned yet: the file is read and hashed to
+    find (or write) its thumbnail. The source file is only ever opened for reading.
+    """
+    if content_hash is not None:
+        dest = thumb_path(thumbs_root, content_hash)
+        if dest.exists():
+            return dest
     register_heif()
     src = source_root.joinpath(*relative_path.split("/"))
     try:
-        with open(src, "rb") as fh, Image.open(io.BytesIO(fh.read())) as img:
-            make_thumbnail(img, dest)
+        with open(src, "rb") as fh:
+            data = fh.read()
+        dest = thumb_path(thumbs_root, content_hash or hash_bytes(data))
+        if not dest.exists():
+            with Image.open(io.BytesIO(data)) as img:
+                make_thumbnail(img, dest)
     except Exception as exc:
         log.warning("Could not regenerate thumbnail for %s: %s", relative_path, exc)
         return None
