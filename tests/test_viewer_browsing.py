@@ -118,7 +118,12 @@ def test_format_size():
 
 def test_reveal_argv_per_platform():
     p = Path("/x/y.jpg")
-    assert info_panel.reveal_argv(p, "win32") == ["explorer", f"/select,{p}"]
+    # Windows gets a command line with only the path quoted; a quoted "/select,..." is
+    # ignored by Explorer, which then opens a default folder instead.
+    spaced = Path("/Users/a b/Google Photos/IMG_1.jpg")
+    assert info_panel.reveal_argv(spaced, "win32") == (
+        f'explorer /select,"{os.path.normpath(spaced)}"'
+    )
     assert info_panel.reveal_argv(p, "darwin") == ["open", "-R", str(p)]
     assert info_panel.reveal_argv(p, "linux", wsl_path=r"\\wsl$\d\x\y.jpg") == [
         "explorer.exe",

@@ -58,14 +58,19 @@ def is_wsl() -> bool:
 
 def reveal_argv(
     path: Path, platform: str = sys.platform, wsl_path: str | None = None
-) -> list[str] | None:
+) -> list[str] | str | None:
     """The command that shows ``path`` selected in the platform's file manager, or None
     when there is no way to select a file (the caller then just opens the folder).
 
     ``wsl_path`` is the Windows form of the path when running under WSL.
+
+    On Windows this is a command line, not a list: ``subprocess`` would quote the whole
+    ``/select,<path>`` argument when the path has a space, and Explorer then ignores the
+    switch and opens a default folder. Only the path may be quoted (Windows paths cannot
+    contain ``"``).
     """
     if platform == "win32":
-        return ["explorer", f"/select,{path}"]
+        return f'explorer /select,"{os.path.normpath(path)}"'
     if platform == "darwin":
         return ["open", "-R", str(path)]
     if wsl_path:
