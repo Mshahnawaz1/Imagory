@@ -21,7 +21,7 @@ a = Analysis(
     ["imagory/__main__.py"],
     pathex=["."],
     binaries=[],
-    datas=[("LICENSE", "."), ("THIRD_PARTY_LICENSES.txt", ".")],
+    datas=[("LICENSE", "."), ("THIRD_PARTY_LICENSES.txt", "."), ("assets", "assets")],
     hiddenimports=["pillow_heif"],
     excludes=["tkinter", "unittest", "pydoc", "pytest", *QT_EXCLUDES],
     noarchive=False,
@@ -37,9 +37,11 @@ if ONEFILE:
         [],
         name="Imagory",
         console=False,
+        icon="assets/imagory.ico",
         upx=False,
         strip=False,
     )
 else:
-    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Imagory", console=False)
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Imagory", console=False,
+              icon="assets/imagory.ico")
     coll = COLLECT(exe, a.binaries, a.datas, name="Imagory", upx=False, strip=False)

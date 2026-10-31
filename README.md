@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/imagory-logo.svg" alt="imagory" height="64"></p>
+
 # Imagory
 
 A free, open source photo browser for Windows. Point it at your photo folders and
