@@ -2,11 +2,10 @@
 
 Imagory is an offline Windows desktop app (Python 3.12, PySide6, SQLite) for browsing local photo folders and Google Takeout exports. `PRD.md` is the source of truth for scope, architecture, and the data model. Read the relevant PRD section before designing or changing anything. If a request conflicts with the PRD, say so instead of quietly changing course.
 
-## Current focus: V0 only
-- Build only what PRD §7 describes: pick a folder, scan it in the background, browse thumbnails, view a photo, reopen from the database.
-- V0 still uses the **V1 core schema** (`sources`, `files`, `photos`, `scan_runs`, `settings`) with one source, one photo per file, and empty hash columns (PRD §7.1, §9).
-- Out of scope until asked (PRD §7.4): hashing, duplicates, moved-file detection, Takeout parsing, filename dates, albums, search/filters, multiple sources, month headers, the custom virtualized grid, viewer zoom/pan, a settings screen.
-- "Done" for V0 is the checklist in PRD §7.5. Refer to it when deciding what to work on next.
+## Current focus: V1
+- V0 (PRD §7) is implemented; its Windows `.exe` checks in §7.5 are still pending.
+- V1 is PRD §8, broken into tasks in `tasks.md`. Work section by section and tick a box only once the item is implemented, tested, and committed.
+- Still out of scope (PRD §3, §14): faces, Takeout zips (V1.5), portable mode, a settings screen.
 
 ## Non-negotiable principles (PRD §3)
 - **Never modify the user's photos.** Only read photo files. Never move, rename, edit, or delete them, and never write anything into photo folders. Any code path that opens a source file for writing is a bug.
@@ -15,13 +14,15 @@ Imagory is an offline Windows desktop app (Python 3.12, PySide6, SQLite) for bro
 - **Hide, never destroy.** Database rows are removed only through an explicit, confirmed user action, never automatically.
 
 ## Project structure
-Planned layout. Nothing exists yet, so create modules as V0 needs them.
+Create new modules as the work needs them.
 - `imagory/` is the application package, one module per job (PRD §6.1):
   - `db.py`: connection setup (WAL, `foreign_keys=ON`, `synchronous=NORMAL`), migrations, **all SQL**
   - `scanner.py`: walk, diff, queue work, apply results
   - `metadata.py`: dimensions, format, EXIF date and orientation
   - `thumbs.py`: generating and locating cached thumbnails
-  - `takeout.py`: V1 only, don't create it yet
+  - `sources.py`: source checks, relocation, removal
+  - `takeout.py`: Takeout detection now, sidecar matching and reading later (PRD §8.3)
+  - `dates.py`: date rules (PRD §8.4), pure functions
   - `ui/`: main window, grid, viewer, dialogs
   - `paths.py` (or similar): library folder resolution and the bundled-resource helper (`sys._MEIPASS`)
   - `__main__.py`: entry point. Calls `multiprocessing.freeze_support()` first.
@@ -41,7 +42,7 @@ Planned layout. Nothing exists yet, so create modules as V0 needs them.
 - `modified_time` is integer nanoseconds (`st_mtime_ns`).
 - `taken_at_local` is ISO 8601 with no offset (`2019-01-31T23:59:59`). UTC timestamps are ISO 8601 ending in `Z`.
 - Schema version lives in `PRAGMA user_version`. Each version step is a numbered migration that runs in a transaction, and `imagory.db` is copied to `imagory.db.bak` before migrating. Never edit a released migration; add a new one.
-- V0 thumbnails go in `thumbs/ab/cd/<blake2b(relative_path)>.jpg`, 320 px longest edge, JPEG quality 85, EXIF orientation applied, Pillow draft mode for JPEGs.
+- Thumbnails go in `thumbs/source-<id>/ab/cd/<blake2b(relative_path)>.jpg` until they are keyed by content hash (§8.5), 320 px longest edge, JPEG quality 85, EXIF orientation applied, Pillow draft mode for JPEGs.
 
 ## Library folder
 - Windows uses `%LOCALAPPDATA%\Imagory\`, other platforms `$XDG_DATA_HOME/imagory` (default `~/.local/share/imagory`).
