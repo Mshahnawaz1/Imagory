@@ -48,6 +48,17 @@ def format_coordinates(latitude: float | None, longitude: float | None) -> str:
     return f"{abs(latitude):.5f}° {ns}, {abs(longitude):.5f}° {ew}"
 
 
+def format_utc(value: str | None) -> str:
+    """A UTC timestamp ("2019-01-31T23:59:59Z") for display; "" when there is none."""
+    if not value:
+        return ""
+    return value.replace("T", " ").removesuffix("Z") + " UTC"
+
+
+def format_people(names: tuple[str, ...] | list[str]) -> str:
+    return ", ".join(name for name in names if name)
+
+
 def full_path(location: PhotoLocation) -> Path:
     return Path(location.source_root).joinpath(*location.relative_path.split("/"))
 
@@ -122,6 +133,14 @@ def describe(info: PhotoInfo | None) -> str:
     else:
         date = "Unknown date"
     parts = [row("Date", date), row("Location", format_coordinates(info.latitude, info.longitude))]
+    if info.people:
+        parts.append(row("People", format_people(info.people)))
+    if info.description:
+        parts.append(row("Caption", info.description))
+    if info.favorite:
+        parts.append(row("Favourite", "Yes"))
+    if info.uploaded_at_utc:
+        parts.append(row("Added to Google Photos", format_utc(info.uploaded_at_utc)))
     primary = info.primary
     if primary:
         parts.append(row("Source", primary.source_label))
