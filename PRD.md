@@ -27,7 +27,7 @@ Imagory is a free, open source, fully offline Windows application that helps non
 **Non-goals (V0 and V1)**
 
 - Deleting or moving files on disk, including duplicate removal.
-- Face recognition (planned for V2).
+- Face detection and recognition (planned for V2). Reading the person names that Google already stored in Takeout sidecars is not face recognition and is in scope (section 8.9).
 - RAW and video support.
 - Cloud sync, mobile apps, multi-user, accounts.
 - Photo editing.
@@ -193,7 +193,7 @@ Hashing, duplicate detection, moved-file detection, Takeout parsing, filename da
   - long names truncated to about 46 to 51 characters before the extension;
   - numbered duplicates where the counter moves, such as `IMG_1234(1).jpg` matching `IMG_1234.jpg(1).json`;
   - edited copies such as `IMG_1234-edited.jpg`, which have no own sidecar and use the original's.
-- Fields read from the sidecar: `photoTakenTime`, `geoData` (ignored if both coordinates are 0), and `title` (the original filename, used to confirm a match).
+- Fields read from the sidecar: `photoTakenTime`, `geoData` (ignored if both coordinates are 0), and `title` (the original filename, used to confirm a match), plus, from the people-and-metadata task (section 8.9): `people` (the names tagged in Google Photos), `description` (the caption), `favorited`, and `creationTime` (when the photo was added to Google Photos). Other fields (`url`, `imageViews`, device and app info) are ignored: `url` is a Google link, and the rest is noise for an offline app.
 - **Folders:** the `Trash` folder is skipped by default. `Archive` is imported normally. Takeout album folders are scanned like any other folder; their copies of photos from the year folders collapse as exact duplicates, and no Imagory album is created from them.
 - **Edited copies** are separate photos. Both appear in the grid, and the edited copy gets its date from the original's sidecar.
 - A sidecar matching report (matched, unmatched images, unused sidecars) is written to the log after each Takeout scan, to tune the matching rules.
@@ -230,20 +230,35 @@ Each file gets one best date and a `date_source` recording where it came from (`
 - **Grid:** sorted newest first by `taken_at_local`, with month section headers ("October 2026"). Photos with no date at all sort into an "Unknown date" section at the end.
 - The grid is a custom virtualized view (based on QAbstractScrollArea). It computes row positions from per-month photo counts and only paints and loads the visible rows. This keeps scrolling smooth at 100,000 photos with headers, which a standard QListView does not handle well. Prototype this early in V1 (risk in section 17).
 - **Selection:** click, Ctrl-click, Shift-click, and Ctrl+A. The right-click menu and toolbar offer "Add to album" and "Open in viewer".
-- **Viewer:** fit-to-window view, zoom and pan, next and previous (arrow keys), and an info panel with date and its source, location coordinates if known, source label, full path, size, dimensions, and duplicate locations. "Show in Explorer" opens the folder containing the file (read-only, allowed by principle 1).
+- **Viewer:** fit-to-window view, zoom and pan, next and previous (arrow keys), and an info panel with date and its source, location coordinates if known, source label, full path, size, dimensions, duplicate locations, and, for Takeout photos, the people, caption, favourite flag, and Google Photos upload date. "Show in Explorer" opens the folder containing the file (read-only, allowed by principle 1).
 
 ### 8.7 Search and filters
 
-- **Text search** on filename and relative folder path (SQL `LIKE`, which is fast enough at this scale).
-- **Filters:** date range, source, folder, album, "Has duplicates", and "Missing".
+- **Text search** on filename, relative folder path, person names, and the caption (SQL `LIKE`, which is fast enough at this scale). Every word must match at least one of these.
+- **Filters:** date range, source, folder, album, person, "Has duplicates", and "Missing".
 - Filters combine with AND, and the grid and month headers update to the filtered set.
-- No person, object, or content search in V1.
+- No object or content search, and no face-based search, in V1. Person search and filtering use only the names from Takeout sidecars.
 
 ### 8.8 Albums
 
 - Manual albums only. Photos are added by reference, and no files are copied.
 - Create, rename, and delete albums. Add and remove photos, including multi-selection. Deleting an album never touches the photos.
 - An album is shown in the same grid, using the same month grouping.
+
+### 8.9 People and Takeout metadata
+
+Google Photos stores the names you tagged in a photo in its Takeout sidecar (`people`). Imagory keeps them. This is not face recognition: Imagory only copies text that is already in the sidecar.
+
+- **Reading:** `takeout.parse_sidecar` also returns the people names, caption, favourite flag, and upload time. Names are trimmed, blank ones dropped, and duplicates (ignoring case) collapsed.
+- **Storing:** a `people` table and a `photo_people` link table (section 9). People are linked to photos, not files, so a photo that exists in several folders or sources has the **union** of the names from all its sidecars. Edited copies take the original's people, as they do for dates and location.
+- **Never removed automatically** (principle 4): a rescan only adds names. If a name was removed in Google Photos before the export, a photo scanned earlier keeps the old name; this is accepted for now.
+- **Caption and favourite:** the first non-empty caption is kept; a photo is a favourite if any copy is.
+- **Existing libraries:** no backfill. A normal scan skips unchanged files, so photos scanned before this feature get names only when they are scanned again. While Imagory is in development, remove the Takeout source (or delete the library folder) and add it again.
+- **People section:** the sidebar's Library group gets a "People" section listing each person with their photo count, most photos first. Clicking a person opens the usual grid and month headers filtered to that person (combined with AND with the other filters, like an album). Only people with at least one visible photo are listed. Disabled during scans, like albums.
+- **Filter bar:** a person control sets the same filter and shows as a chip.
+- **Search:** the text box also matches person names and captions.
+- **Out of scope:** renaming, merging, or deleting people, a Favourites filter, and anything face-based (V2).
+- **Privacy:** names are personal data stored only in the local database. Nothing is sent anywhere.
 
 ## 9. Data model (SQLite)
 
@@ -256,7 +271,8 @@ sources      id, label, root_path, type ('plain' | 'takeout'), type_overridden,
 photos       id, content_hash UNIQUE (NULL in V0), primary_file_id,
              width, height, format,
              taken_at_local, taken_at_utc, date_source,
-             latitude, longitude
+             latitude, longitude,
+             description, favorite (0 | 1), uploaded_at_utc     -- Takeout only (migration 4)
 
 files        id, source_id, photo_id, relative_path, size, modified_time,
              content_hash, status ('ok' | 'missing'),
@@ -265,6 +281,9 @@ files        id, source_id, photo_id, relative_path, size, modified_time,
              sidecar_relative_path,                        -- Takeout only
              first_seen_at, last_seen_at
              UNIQUE (source_id, relative_path)
+
+people       id, name UNIQUE COLLATE NOCASE                -- migration 4
+photo_people photo_id, person_id    PRIMARY KEY (photo_id, person_id)
 
 albums       id, name, created_at
 album_photos album_id, photo_id, added_at    PRIMARY KEY (album_id, photo_id)
@@ -276,7 +295,7 @@ scan_runs    id, source_id, started_at, finished_at, status,
 settings     key, value
 ```
 
-**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `files(source_id, content_hash)` (move detection), `album_photos(photo_id)`, `scan_runs(source_id)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
+**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `files(source_id, content_hash)` (move detection), `album_photos(photo_id)`, `photo_people(person_id)`, `scan_runs(source_id)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
 
 **Design choices**
 
@@ -289,7 +308,7 @@ settings     key, value
 - **V0 databases are replaced, not migrated.** V0 was only a test build, so a database older than schema version 3 (V0 and development builds) is deleted and recreated empty when Imagory starts, and the user adds their folders again. From version 3 on, every change is a numbered migration with a backup.
 - Connection settings: `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`.
 - Schema version lives in `PRAGMA user_version`. Migrations are numbered functions that run in order inside a transaction, and the database file is copied to `imagory.db.bak` before migrating.
-- Face data (V2) will be added by migration: a `faces` table with photo_id, bounding box, embedding BLOB, model name, and model version, plus a `people` table.
+- Face data (V2) will be added by migration: a `faces` table with photo_id, bounding box, embedding BLOB, model name, and model version, plus a `people` table. The `people` table from section 8.9 is reused: V2 adds a face-to-person link rather than a second table.
 
 ## 10. Performance targets
 
@@ -361,6 +380,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | File handling | Read-only, store paths only, no app data in photo folders |
 | V0 | Directory scan, preview, SQLite storage, using the V1 core schema |
 | V0 behaviour | Reopen from database, manual incremental rescan; changing the folder replaces the source after confirmation; newest first by EXIF date, falling back to modified time |
+| People from Takeout | Names in Takeout sidecars are stored per photo (union across copies, never removed by a rescan; no backfill for photos scanned earlier), shown in the info panel, searchable, filterable, and listed in a People sidebar section. Caption, favourite, and upload time are read too. Not face recognition. Extends V1 scope (section 8.9) |
 | V1 | Sources, Takeout folders, exact duplicates, grid, viewer, search and filters, albums |
 | Takeout zips | V1.5 |
 | Architecture | One database writer thread, worker processes for CPU work, commit per batch |
