@@ -6,11 +6,14 @@ palette (Base is the paper colour, Highlight the selection outline), so ``apply_
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
+
+from imagory import db
 
 
 @dataclass(frozen=True)
@@ -57,8 +60,44 @@ VIEWER_BACKGROUND = "#0B1A15"
 VIEWER_TEXT = "#F1EFE7"
 
 
-def is_dark(app: QApplication) -> bool:
-    return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+SYSTEM, LIGHT_MODE, DARK_MODE = "system", "light", "dark"
+THEME_MODES = (SYSTEM, LIGHT_MODE, DARK_MODE)
+THEME_SETTING = "theme"
+_MODE_PROPERTY = "imagory_theme_mode"
+
+
+def normalize_mode(value: str | None) -> str:
+    """A stored value as a known theme mode; anything unknown means System."""
+    return value if value in THEME_MODES else SYSTEM
+
+
+def resolve_dark(mode: str, os_dark: bool) -> bool:
+    """Whether to use the dark palette for a theme mode and the OS scheme."""
+    mode = normalize_mode(mode)
+    return os_dark if mode == SYSTEM else mode == DARK_MODE
+
+
+def is_dark(app: QApplication, mode: str = SYSTEM) -> bool:
+    os_dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    return resolve_dark(mode, os_dark)
+
+
+def load_mode(conn: sqlite3.Connection) -> str:
+    return normalize_mode(db.get_setting(conn, THEME_SETTING))
+
+
+def save_mode(conn: sqlite3.Connection, mode: str) -> None:
+    db.set_setting(conn, THEME_SETTING, normalize_mode(mode))
+
+
+def current_mode(app: QApplication) -> str:
+    return normalize_mode(app.property(_MODE_PROPERTY))
+
+
+def on_os_scheme_changed(app: QApplication) -> None:
+    """Re-theme after the OS scheme flips, but only when following the OS."""
+    if current_mode(app) == SYSTEM:
+        apply_theme(app)
 
 
 def make_palette(c: Colours) -> QPalette:
@@ -145,11 +184,14 @@ QWidget#filter-bar {{ background: {c.surface}; border-bottom: 1px solid {c.line}
 """
 
 
-def apply_theme(app: QApplication) -> None:
+def apply_theme(app: QApplication, mode: str | None = None) -> None:
     """Use the Fusion style (it follows the palette and stylesheet on every platform) and
-    the colours for the current light or dark scheme."""
+    the colours for the chosen mode (System follows the OS). Without ``mode`` the mode
+    applied last is kept."""
+    mode = current_mode(app) if mode is None else normalize_mode(mode)
+    app.setProperty(_MODE_PROPERTY, mode)
     app.setStyle("Fusion")
-    colours = DARK if is_dark(app) else LIGHT
+    colours = DARK if is_dark(app, mode) else LIGHT
     app.setPalette(make_palette(colours))
     font = app.font()
     if font.pointSizeF() < 9.5:

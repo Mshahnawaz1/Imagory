@@ -9,8 +9,17 @@ from html import escape as html_escape
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QDesktopServices, QKeySequence, QPalette
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QColor,
+    QDesktopServices,
+    QKeySequence,
+    QPalette,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -38,7 +47,16 @@ from imagory.ui.photo_grid import PhotoGrid
 from imagory.ui.scan_thread import ScanThread, SourceScanResult
 from imagory.ui.sidebar import Sidebar
 from imagory.ui.sources_dialog import TYPE_NAMES, AddSourceDialog, SourcesDialog, default_label
-from imagory.ui.theme import VIEWER_BACKGROUND, VIEWER_TEXT
+from imagory.ui.theme import (
+    DARK_MODE,
+    LIGHT_MODE,
+    SYSTEM,
+    VIEWER_BACKGROUND,
+    VIEWER_TEXT,
+    apply_theme,
+    load_mode,
+    save_mode,
+)
 from imagory.ui.viewer import PhotoViewer
 
 log = logging.getLogger(__name__)
@@ -268,6 +286,19 @@ class MainWindow(QMainWindow):
         self.sidebar_action.toggled.connect(self.set_sidebar_visible)
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.sidebar_action)
+        view_menu.addSeparator()
+        theme_menu = view_menu.addMenu("&Theme")
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_actions: dict[str, QAction] = {}
+        saved_mode = load_mode(self.conn)
+        for mode, label in ((SYSTEM, "&System"), (LIGHT_MODE, "&Light"), (DARK_MODE, "&Dark")):
+            action = theme_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(mode == saved_mode)
+            action.triggered.connect(lambda _checked=False, m=mode: self.set_theme(m))
+            self.theme_group.addAction(action)
+            self.theme_actions[mode] = action
 
         self.albums_menu = self.menuBar().addMenu("&Albums")
         self.albums_menu.aboutToShow.connect(self._fill_albums_menu)
@@ -276,6 +307,13 @@ class MainWindow(QMainWindow):
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Open log folder", self.open_log_folder)
         help_menu.addAction("About Imagory", self.show_about)
+
+    def set_theme(self, mode: str) -> None:
+        """Apply a theme mode to the whole app now and remember it."""
+        save_mode(self.conn, mode)
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, mode)
 
     def _build_album_bar(self) -> QWidget:
         bar = QWidget(self)
