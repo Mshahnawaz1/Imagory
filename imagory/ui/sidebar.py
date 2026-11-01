@@ -124,9 +124,11 @@ class Sidebar(QFrame):
         self._add("All photos", "all")
         self._add("Duplicates", "duplicates")
         if self._people:
-            self._heading("People")
+            self._add("People", "none", muted=True)
             for person_id, name, count in self._people:
-                self._add(f"{name}   {count:,}", "person", person_id, enabled=self._people_enabled)
+                self._add(
+                    f"    {name}   {count:,}", "person", person_id, enabled=self._people_enabled
+                )
         self._heading("Albums")
         for album_id, name, count in self._albums:
             self._add(f"{name}   {count:,}", "album", album_id)
