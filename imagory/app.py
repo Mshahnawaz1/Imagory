@@ -31,7 +31,7 @@ def run(argv: list[str] | None = None) -> int:
 
     from imagory.ui.icons import app_icon
     from imagory.ui.main_window import MainWindow
-    from imagory.ui.theme import apply_theme
+    from imagory.ui.theme import apply_theme, load_mode, on_os_scheme_changed
 
     library_root = paths.ensure_library_dir()
     setup_logging(paths.logs_dir(library_root))
@@ -42,12 +42,13 @@ def run(argv: list[str] | None = None) -> int:
     app.setApplicationName("Imagory")
     app.setApplicationVersion(__version__)
     app.setWindowIcon(app_icon())
-    apply_theme(app)
-    app.styleHints().colorSchemeChanged.connect(lambda _scheme: apply_theme(app))
+    apply_theme(app)  # System until the saved choice is read below
+    app.styleHints().colorSchemeChanged.connect(lambda _scheme: on_os_scheme_changed(app))
 
     try:
         conn = db.open_database(paths.db_path(library_root))
         upgrade_thumbnail_cache(conn, paths.thumbs_dir(library_root))
+        apply_theme(app, load_mode(conn))
     except Exception as exc:
         log.exception("Could not open the library database")
         QMessageBox.critical(None, "Imagory", f"Could not open the library database:\n{exc}")
