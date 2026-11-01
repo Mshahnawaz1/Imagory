@@ -15,7 +15,10 @@ extracted Google Takeout exports and get one fast, browsable library.
 background, browse all their thumbnails in one grid, view photos, and reopen the library
 later without rescanning. Exact duplicates show once, moved files are recognised, and
 dates come from EXIF (with its time zone when known) or the filename. Takeout dates,
-albums, and search are still to come in the app (see [PRD.md](PRD.md)).
+locations, and the people tagged in Google Photos are read from the JSON files. The sidebar
+has a People section, and you can search and filter by person (names are only copied from
+Takeout, Imagory does no face recognition). Photos scanned before this feature get names
+once their source is removed and added again. See [PRD.md](PRD.md).
 
 ## Using Imagory
 
