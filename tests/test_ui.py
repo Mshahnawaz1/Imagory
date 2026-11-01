@@ -415,3 +415,13 @@ def test_remove_asks_first_and_says_files_are_kept(qtbot, photos, monkeypatch, n
     assert len(window.photos) == 3
     window.close()
     conn.close()
+
+
+def test_sidebar_toggle_and_setting(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAGORY_LIBRARY", str(tmp_path / "lib"))
+    window, conn = open_window(qtbot)
+    window.sidebar_action.setChecked(False)
+    assert db.get_setting(conn, mw.SIDEBAR_SETTING) == "0"
+    window.sidebar_action.setChecked(True)
+    assert db.get_setting(conn, mw.SIDEBAR_SETTING) == "1"
+    assert window.sidebar.isHidden()  # no sources yet, so there is nothing to browse

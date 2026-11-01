@@ -14,18 +14,21 @@ from collections import OrderedDict
 from collections.abc import Callable, Hashable, Sequence
 from typing import Protocol
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QRect, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtCore import QEvent, QObject, QRect, QRectF, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QHelpEvent,
     QImage,
     QKeyEvent,
     QKeySequence,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPaintEvent,
     QPalette,
+    QPen,
     QPixmap,
     QResizeEvent,
 )
@@ -38,6 +41,12 @@ CELL_PADDING = 8
 CELL_SIZE = ICON_SIZE + CELL_PADDING * 2
 SPACING = 4
 HEADER_HEIGHT = 40
+CAPTION_GAP = 4  # between the thumbnail area and the caption line
+SELECTION_WIDTH = 3
+CORNER_RADIUS = 4
+# Thumbnail levels: name -> icon size in px (thumbnails on disk are 320 px; smaller
+# cells scale them down). "medium" is the default.
+THUMBNAIL_SIZES = {"small": 112, "medium": ICON_SIZE, "large": 240}
 CACHE_ITEMS = 1500  # about 100 KB each at 160 px
 
 
@@ -58,6 +67,11 @@ class GridDataSource(Protocol):
 
     def tooltip(self, index: int) -> str:
         """Tooltip text for the item at ``index`` (empty for none)."""
+        ...
+
+    def caption(self, index: int) -> str:
+        """File name shown under the thumbnail (empty for none). Optional: a source
+        without this method gets no captions."""
         ...
 
 
@@ -219,11 +233,14 @@ class PhotoGrid(QAbstractScrollArea):
     ) -> None:
         super().__init__(parent)
         self.cell_size = cell_size
+        self._thumbnail_size = "medium"
+        self.selection_colour = QColor(self.palette().color(QPalette.ColorRole.Highlight))
         self.spacing = spacing
         self.header_height = header_height
         self._source: GridDataSource | None = None
         self._provider: ThumbnailProvider | None = None
-        self.grid_layout = GridLayout([], 1, cell_size, spacing, header_height)
+        self.caption_height = QFontMetrics(self.font()).height() + CAPTION_GAP
+        self.grid_layout = GridLayout([], 1, cell_size, spacing, header_height, self.caption_height)
         self._selected = bytearray()
         self._current = -1
         self._anchor = -1  # where Shift-selection starts
@@ -325,6 +342,29 @@ class PhotoGrid(QAbstractScrollArea):
     def count(self) -> int:
         return self.grid_layout.count
 
+    @property
+    def thumbnail_size(self) -> str:
+        """Current level: "small", "medium" (default) or "large"."""
+        return self._thumbnail_size
+
+    def set_thumbnail_size(self, level: str) -> None:
+        """Change the cell size to a level in ``THUMBNAIL_SIZES``, keeping the photo at
+        the top of the viewport in view."""
+        if level not in THUMBNAIL_SIZES:
+            raise ValueError(f"unknown thumbnail size {level!r}")
+        if level == self._thumbnail_size:
+            return
+        self._thumbnail_size = level
+        self.cell_size = THUMBNAIL_SIZES[level] + 2 * CELL_PADDING
+        old = self.grid_layout
+        anchor = old.anchor(self.scroll_y())
+        self._build_layout()
+        self.verticalScrollBar().setSingleStep(self.cell_size // 4)
+        self.verticalScrollBar().setValue(self.grid_layout.anchor_y(anchor))
+        if self._current >= 0:
+            self.scroll_to(self._current)
+        self.viewport().update()
+
     def set_empty_text(self, text: str) -> None:
         """Shown in the middle of the grid while it has no items."""
         self._empty_text = text
@@ -338,6 +378,7 @@ class PhotoGrid(QAbstractScrollArea):
             self.cell_size,
             self.spacing,
             self.header_height,
+            self.caption_height,
         )
         self._update_scrollbar()
 
@@ -418,27 +459,69 @@ class PhotoGrid(QAbstractScrollArea):
             )
 
         source, provider, selected = self._source, self._provider, self._selected
-        highlight = palette.color(QPalette.ColorRole.Highlight)
+        accent = self.selection_colour
         placeholder = self._placeholder
+        muted = palette.color(QPalette.ColorRole.PlaceholderText)
+        normal = palette.color(QPalette.ColorRole.Text)
+        font = self.font()
+        bold = QFont(font)
+        bold.setBold(True)
+        metrics, bold_metrics = QFontMetrics(font), QFontMetrics(bold)
         inset = CELL_PADDING
+        caption_of = getattr(source, "caption", None)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         for index, r in layout.visible_cells(top, bottom):
             x, y = r.x, r.y - dy
-            if selected[index]:
-                painter.fillRect(x, y, r.width, r.height, highlight)
+            area = QRectF(x + inset, y + inset, r.width - 2 * inset, r.width - 2 * inset)
             pix = None
             if provider is not None and source is not None:
                 pix = provider.thumbnail(index, source.item(index))
             if pix is None:
-                painter.fillRect(
-                    x + inset, y + inset, r.width - 2 * inset, r.height - 2 * inset, placeholder
-                )
+                target = area
             else:
                 ratio = pix.devicePixelRatio()
-                px = x + (r.width - pix.width() / ratio) / 2
-                py = y + (r.height - pix.height() / ratio) / 2
-                painter.drawPixmap(QPointF(px, py), pix)
+                w, h = pix.width() / ratio, pix.height() / ratio
+                scale = min(area.width() / w, area.height() / h) if w and h else 1.0
+                w, h = w * scale, h * scale
+                target = QRectF(
+                    area.x() + (area.width() - w) / 2, area.y() + (area.height() - h) / 2, w, h
+                )
+            path = QPainterPath()
+            path.addRoundedRect(target, CORNER_RADIUS, CORNER_RADIUS)
+            if pix is None:
+                painter.fillPath(path, placeholder)
+            else:
+                painter.save()
+                painter.setClipPath(path)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                painter.drawPixmap(target, pix, QRectF(pix.rect()))
+                painter.restore()
+            if selected[index]:
+                half = SELECTION_WIDTH / 2
+                ring = QPainterPath()
+                ring.addRoundedRect(
+                    target.adjusted(-half, -half, half, half),
+                    CORNER_RADIUS + half,
+                    CORNER_RADIUS + half,
+                )
+                painter.setPen(QPen(accent, SELECTION_WIDTH))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(ring)
+            text = caption_of(index) if caption_of is not None else ""
+            if text:
+                m = bold_metrics if selected[index] else metrics
+                painter.setFont(bold if selected[index] else font)
+                painter.setPen(normal if selected[index] else muted)
+                width = r.width - 2 * inset // 2
+                cap = QRect(x + inset // 2, y + r.width, width, r.height - r.width)
+                painter.drawText(
+                    cap,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                    m.elidedText(text, Qt.TextElideMode.ElideRight, width),
+                )
             if index == self._current and self.hasFocus():
-                painter.setPen(highlight)
+                painter.setPen(QPen(accent, 1, Qt.PenStyle.DotLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(x, y, r.width - 1, r.height - 1)
         painter.end()
 

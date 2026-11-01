@@ -121,7 +121,8 @@ class GridLayout:
     """Header and cell positions for one viewport width.
 
     Each section is a header ``header_height`` high followed by its rows. A row is
-    ``cell_size`` high with ``spacing`` below it. Columns are centred horizontally.
+    ``cell_size + caption_height`` high with ``spacing`` below it; cells are ``cell_size``
+    wide. Columns are centred horizontally.
     """
 
     def __init__(
@@ -131,14 +132,18 @@ class GridLayout:
         cell_size: int,
         spacing: int = 4,
         header_height: int = 40,
+        caption_height: int = 0,
     ) -> None:
-        if cell_size <= 0 or spacing < 0 or header_height < 0:
-            raise ValueError("cell_size must be positive, spacing and header_height >= 0")
+        if cell_size <= 0 or spacing < 0 or header_height < 0 or caption_height < 0:
+            raise ValueError("cell_size must be positive, other sizes >= 0")
         self.sections = sections
         self.cell_size = cell_size
         self.spacing = spacing
         self.header_height = header_height
-        self.pitch = cell_size + spacing
+        self.caption_height = caption_height
+        self.cell_height = cell_size + caption_height
+        self.pitch = cell_size + spacing  # column pitch
+        self.row_pitch = self.cell_height + spacing
         self.count = sections[-1].first + sections[-1].count if sections else 0
         self._firsts = [s.first for s in sections]
         self.reflow(width)
@@ -156,7 +161,7 @@ class GridLayout:
             tops.append(y)
             n = -(-section.count // self.columns)
             rows.append(n)
-            y += self.header_height + n * self.pitch
+            y += self.header_height + n * self.row_pitch
         self._tops = tops
         self._rows = rows
         self.height = y + self.spacing if self.sections else 0
@@ -186,8 +191,8 @@ class GridLayout:
     def item_rect(self, index: int) -> Rect:
         s = self.section_of(index)
         row, col = divmod(index - self._firsts[s], self.columns)
-        y = self._tops[s] + self.header_height + row * self.pitch
-        return Rect(self.left + col * self.pitch, y, self.cell_size, self.cell_size)
+        y = self._tops[s] + self.header_height + row * self.row_pitch
+        return Rect(self.left + col * self.pitch, y, self.cell_size, self.cell_height)
 
     def item_at(self, x: int, y: int) -> int | None:
         """Hit-test a content point. Headers, gaps and margins hit nothing."""
@@ -198,9 +203,9 @@ class GridLayout:
         dx = x - self.left
         if dy < 0 or dx < 0:
             return None
-        row, in_row = divmod(dy, self.pitch)
+        row, in_row = divmod(dy, self.row_pitch)
         col, in_col = divmod(dx, self.pitch)
-        if in_row >= self.cell_size or in_col >= self.cell_size or col >= self.columns:
+        if in_row >= self.cell_height or in_col >= self.cell_size or col >= self.columns:
             return None
         local = row * self.columns + col
         section = self.sections[s]
@@ -219,8 +224,8 @@ class GridLayout:
     def _first_item_from(self, s: int, top: int) -> int:
         """First item whose cell reaches below ``top``, starting in section ``s``."""
         rows_top = self._tops[s] + self.header_height
-        # Row r's cell spans [rows_top + r * pitch, rows_top + r * pitch + cell_size).
-        row = max(0, (top - rows_top - self.cell_size) // self.pitch + 1)
+        # Row r's cell spans [rows_top + r * row_pitch, ... + cell_height).
+        row = max(0, (top - rows_top - self.cell_height) // self.row_pitch + 1)
         if row >= self._rows[s]:  # band starts below this section's rows
             return self.sections[s].first + self.sections[s].count
         return self.sections[s].first + row * self.columns
@@ -231,7 +236,7 @@ class GridLayout:
         rows_top = self._tops[s] + self.header_height
         if bottom <= rows_top:
             return section.first
-        rows = min(self._rows[s], -(-(bottom - rows_top) // self.pitch))
+        rows = min(self._rows[s], -(-(bottom - rows_top) // self.row_pitch))
         return section.first + min(section.count, rows * self.columns)
 
     def visible_headers(self, top: int, bottom: int) -> Iterator[tuple[int, Rect]]:
@@ -244,7 +249,8 @@ class GridLayout:
     def visible_cells(self, top: int, bottom: int) -> Iterator[tuple[int, Rect]]:
         """``(index, rect)`` for each cell intersecting the band, in grid order."""
         vis = self.visible(top, bottom)
-        cols, pitch, cell, left = self.columns, self.pitch, self.cell_size, self.left
+        cols, pitch, left = self.columns, self.pitch, self.left
+        rpitch, cw, ch = self.row_pitch, self.cell_size, self.cell_height
         for s in range(vis.first_section, vis.end_section):
             section = self.sections[s]
             start = max(vis.first_item, section.first)
@@ -252,7 +258,7 @@ class GridLayout:
             rows_top = self._tops[s] + self.header_height
             for index in range(start, end):
                 row, col = divmod(index - section.first, cols)
-                yield index, Rect(left + col * pitch, rows_top + row * pitch, cell, cell)
+                yield index, Rect(left + col * pitch, rows_top + row * rpitch, cw, ch)
 
     # Keyboard navigation -----------------------------------------------------------
 
@@ -295,8 +301,8 @@ class GridLayout:
         rows_top = self._tops[s] + self.header_height
         if y < rows_top or self._rows[s] == 0:
             return Anchor(s, None, y - self._tops[s])
-        row = min((y - rows_top) // self.pitch, self._rows[s] - 1)
-        return Anchor(s, row * self.columns, y - rows_top - row * self.pitch)
+        row = min((y - rows_top) // self.row_pitch, self._rows[s] - 1)
+        return Anchor(s, row * self.columns, y - rows_top - row * self.row_pitch)
 
     def anchor_y(self, anchor: Anchor) -> int:
         """The scroll position for ``anchor`` in this layout (same sections, any width)."""
@@ -306,5 +312,5 @@ class GridLayout:
         if anchor.local_index is None:
             return self._tops[s] + min(anchor.offset, self.header_height)
         row = min(anchor.local_index, self.sections[s].count - 1) // self.columns
-        offset = min(anchor.offset, self.pitch - 1)
-        return self._tops[s] + self.header_height + row * self.pitch + offset
+        offset = min(anchor.offset, self.row_pitch - 1)
+        return self._tops[s] + self.header_height + row * self.row_pitch + offset

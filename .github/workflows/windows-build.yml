@@ -1,0 +1,55 @@
+name: Windows build
+
+# Builds Imagory.exe with PyInstaller on a real Windows runner and uploads it as a
+# downloadable artifact. Run it by hand: Actions > Windows build > Run workflow, then pick the
+# branch. (GitHub lists a manual workflow only once the file is on the default branch; until
+# then, push a branch named build/<anything> to trigger it.)
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run the test suite before building
+        type: boolean
+        default: false
+  push:
+    branches: ["build/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use a scratch library, never a real one
+        shell: pwsh
+        run: echo "IMAGORY_LIBRARY=$env:RUNNER_TEMP\imagory-library" >> $env:GITHUB_ENV
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Tests
+        if: ${{ github.event_name == 'push' || inputs.run_tests }}
+        run: uv run pytest -q
+      - name: Build Imagory.exe
+        run: uv run pyinstaller --noconfirm --clean imagory.spec
+      - name: Smoke test (the exe starts and stays up)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\Imagory.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "Imagory.exe exited early with code $($p.ExitCode)" }
+          Stop-Process $p
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Imagory-windows-${{ github.sha }}
+          path: dist/Imagory.exe
+          if-no-files-found: error
+          retention-days: 14

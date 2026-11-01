@@ -11,8 +11,8 @@ Recorded 2026-10-31.
 | 3 | Cancel mid-scan, rescan: no duplicate rows, committed files not reprocessed | Pass (`test_cancel_then_resume`, `tests/test_ui.py::test_cancel_scan_from_ui`) |
 | 4 | Corrupt image counted as error, scan continues | Pass (`test_corrupt_image_is_counted_and_scan_continues`) |
 | 5 | Source folder unchanged after a scan | Pass (snapshot checks in every scan integration test) |
-| 6 | 100,000-photo library | Measured on Linux/WSL, see below. **Scrolling smoothness still needs a by-eye check on Windows.** |
-| 7 | PyInstaller `--onefile` .exe on Windows 10 and 11, scan works, size recorded | **Not done: needs real Windows.** The spec was validated with a Linux onefile build, which starts and creates its library (77.8 MB, but Linux Qt libraries are not comparable to Windows). |
+| 6 | 100,000-photo library | Measured on Linux/WSL, see below. Windows 11 (2026-10-31, .exe, V1): 100,000 plain photos scanned in about 10 minutes, thumbnails load and **scrolling is smooth by eye**. Unchanged rescan and first-screen times not yet measured on Windows. |
+| 7 | PyInstaller `--onefile` .exe on Windows 10 and 11, scan works, size recorded | **Windows 11: done** (2026-10-31): the .exe starts, scans plain and Takeout folders, and is **49.4 MB**. **Windows 10: not yet tested.** |
 
 Full suite: 52 passed, 1 skipped (the junction test runs only on Windows).
 
@@ -61,9 +61,10 @@ files are not stored, so a repaired file is picked up (PRD §16).
 
 ## Still to do on Windows
 
-1. `uv run pyinstaller --noconfirm --clean imagory.spec` on Windows. Record the size of
-   `dist\Imagory.exe`.
-2. Start the .exe on Windows 10 and on Windows 11, choose a folder, and let the scan finish.
-   This checks `freeze_support` with worker processes.
-3. Scroll the 100,000-photo grid and record whether it feels smooth.
-4. Run `uv run pytest -q` on Windows (includes the junction test).
+Done on Windows 11 (2026-10-31): the build (49.4 MB), start and scan, and smooth scrolling
+of the 100,000-photo grid by eye. Still open:
+
+1. Start the .exe on Windows 10, choose a folder, and let the scan finish. This checks
+   `freeze_support` with worker processes.
+2. Run `scripts/bench.py` on Windows for the unchanged rescan and first-screen numbers.
+3. Run `uv run pytest -q` on Windows (includes the junction test).

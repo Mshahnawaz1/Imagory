@@ -29,7 +29,9 @@ def upgrade_thumbnail_cache(conn: sqlite3.Connection, thumbs_root: Path) -> None
 def run(argv: list[str] | None = None) -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    from imagory.ui.icons import app_icon
     from imagory.ui.main_window import MainWindow
+    from imagory.ui.theme import apply_theme
 
     library_root = paths.ensure_library_dir()
     setup_logging(paths.logs_dir(library_root))
@@ -39,6 +41,9 @@ def run(argv: list[str] | None = None) -> int:
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("Imagory")
     app.setApplicationVersion(__version__)
+    app.setWindowIcon(app_icon())
+    apply_theme(app)
+    app.styleHints().colorSchemeChanged.connect(lambda _scheme: apply_theme(app))
 
     try:
         conn = db.open_database(paths.db_path(library_root))

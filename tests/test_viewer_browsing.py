@@ -89,7 +89,8 @@ def test_describe_shows_every_field(conn):
     text = info_panel.describe(db.photo_info(conn, photo_id))
     assert "2020-05-01 10:00:00 (from Takeout JSON)" in text
     assert "33.50000\u00b0 S, 151.25000\u00b0 E" in text
-    assert "Phone" in text and "2020/x.jpg" in text
+    # the full path uses the OS separator (backslashes on Windows)
+    assert "Phone" in text and os.path.join("2020", "x.jpg") in text
     assert "1.2 KB" in text
     assert "64 \u00d7 48 (JPEG)" in text
     assert "Also found in" in text and "Backup: copy/x.jpg" in text
@@ -118,7 +119,12 @@ def test_format_size():
 
 def test_reveal_argv_per_platform():
     p = Path("/x/y.jpg")
-    assert info_panel.reveal_argv(p, "win32") == ["explorer", f"/select,{p}"]
+    # Windows gets a command line with only the path quoted; a quoted "/select,..." is
+    # ignored by Explorer, which then opens a default folder instead.
+    spaced = Path("/Users/a b/Google Photos/IMG_1.jpg")
+    assert info_panel.reveal_argv(spaced, "win32") == (
+        f'explorer /select,"{os.path.normpath(spaced)}"'
+    )
     assert info_panel.reveal_argv(p, "darwin") == ["open", "-R", str(p)]
     assert info_panel.reveal_argv(p, "linux", wsl_path=r"\\wsl$\d\x\y.jpg") == [
         "explorer.exe",
@@ -138,7 +144,7 @@ def test_show_in_explorer_falls_back_to_the_folder(tmp_path, monkeypatch):
     make_image(photo)
     before = snapshot(tmp_path)
     assert info_panel.show_in_explorer(photo)
-    assert opened == [str(tmp_path)]
+    assert [Path(p) for p in opened] == [tmp_path]  # toLocalFile() uses "/" on Windows too
     assert not info_panel.show_in_explorer(tmp_path / "nope" / "b.jpg")
     assert snapshot(tmp_path) == before
 

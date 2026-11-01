@@ -9,7 +9,7 @@ from html import escape as html_escape
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSlider,
     QStackedWidget,
     QToolBar,
     QVBoxLayout,
@@ -32,14 +33,19 @@ from imagory.scanner import Progress, ScanSummary
 from imagory.ui.albums import AddToAlbumDialog, AlbumsDialog
 from imagory.ui.filter_bar import FilterBar
 from imagory.ui.grid import PhotoDataSource, PhotoThumbnails, view_queries
+from imagory.ui.icons import app_icon
 from imagory.ui.photo_grid import PhotoGrid
 from imagory.ui.scan_thread import ScanThread, SourceScanResult
+from imagory.ui.sidebar import Sidebar
 from imagory.ui.sources_dialog import TYPE_NAMES, AddSourceDialog, SourcesDialog, default_label
+from imagory.ui.theme import VIEWER_BACKGROUND, VIEWER_TEXT
 from imagory.ui.viewer import PhotoViewer
 
 log = logging.getLogger(__name__)
 
 PAGE_EMPTY, PAGE_GRID, PAGE_VIEWER = range(3)
+SIDEBAR_SETTING = "sidebar_visible"
+THUMBNAIL_LEVELS = ("small", "medium", "large")
 
 
 def summary_text(summary: ScanSummary) -> str:
@@ -84,23 +90,35 @@ class EmptyPage(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.addStretch(1)
+        logo = QLabel(self)
+        logo.setPixmap(app_icon().pixmap(72, 72))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title = QLabel("<h2>Welcome to Imagory</h2>", self)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         text = QLabel(
-            "Add a folder of photos, or an extracted Google Takeout export, to browse. "
-            "Imagory only reads your photos: it never changes, moves, or deletes them, "
-            "and nothing leaves this computer.",
+            "Add a folder of photos, or an extracted Google Takeout export, to browse.",
             self,
         )
         text.setWordWrap(True)
         text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.button = QPushButton("Add a folder…", self)
+        self.button = QPushButton("Add a photo folder…", self)
         self.button.setDefault(True)
         self.button.clicked.connect(on_choose)
+        promise = QLabel(
+            "Imagory only reads your photos. It never changes, moves, or deletes them, "
+            "and nothing leaves this computer.",
+            self,
+        )
+        promise.setWordWrap(True)
+        promise.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        promise.setStyleSheet("color: palette(placeholder-text);")
+        layout.addWidget(logo)
         layout.addWidget(title)
         layout.addWidget(text)
         layout.addSpacing(12)
         layout.addWidget(self.button, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addSpacing(24)
+        layout.addWidget(promise)
         layout.addStretch(2)
 
 
@@ -146,6 +164,11 @@ class MainWindow(QMainWindow):
         self.grid.customContextMenuRequested.connect(self._show_grid_menu)
         self.viewer = PhotoViewer(self)
         self.viewer.set_connection(self.conn)
+        viewer_palette = self.viewer.palette()  # photos stand out on a dark ground
+        viewer_palette.setColor(QPalette.ColorRole.Window, QColor(VIEWER_BACKGROUND))
+        viewer_palette.setColor(QPalette.ColorRole.WindowText, QColor(VIEWER_TEXT))
+        viewer_palette.setColor(QPalette.ColorRole.Text, QColor(VIEWER_TEXT))
+        self.viewer.setPalette(viewer_palette)
         self.viewer.closed.connect(self.close_viewer)
         self.empty = EmptyPage(self.add_source_interactive, self)
 
@@ -161,17 +184,33 @@ class MainWindow(QMainWindow):
         )
         self.filter_bar.filterChanged.connect(self._on_filter_changed)
         self.album_bar = self._build_album_bar()
+        self.sidebar = Sidebar(self)
+        self.sidebar.allPhotosRequested.connect(self._sidebar_all_photos)
+        self.sidebar.duplicatesRequested.connect(self._sidebar_duplicates)
+        self.sidebar.albumRequested.connect(self._sidebar_album)
+        self.sidebar.sourceRequested.connect(self._sidebar_source)
+        self.sidebar.manageAlbumsRequested.connect(self.show_albums)
+        self.sidebar.manageSourcesRequested.connect(self.show_sources)
+        self.sources_changed.connect(self.refresh_sidebar)
         central = QWidget(self)
-        column = QVBoxLayout(central)
+        outer = QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self.sidebar)
+        content = QWidget(central)
+        column = QVBoxLayout(content)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.filter_bar)
         column.addWidget(self.album_bar)
         column.addWidget(self.pages, 1)
+        outer.addWidget(content, 1)
         self.setCentralWidget(central)
 
         self._build_actions()
         self._build_status_bar()
+        self.refresh_sidebar()
+        self.sidebar_action.setChecked(db.get_setting(self.conn, SIDEBAR_SETTING, "1") == "1")
         self.reload_grid()
 
     # --- construction -------------------------------------------------------------------
@@ -222,6 +261,16 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
 
+        self.sidebar_action = QAction("Show sidebar", self)
+        self.sidebar_action.setCheckable(True)
+        self.sidebar_action.setShortcut(QKeySequence("Ctrl+B"))
+        self.sidebar_action.setStatusTip("Show or hide the sidebar (Ctrl+B)")
+        self.sidebar_action.toggled.connect(self.set_sidebar_visible)
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.sidebar_action)
+        toolbar.insertAction(self.add_action, self.sidebar_action)
+        toolbar.insertSeparator(self.add_action)
+
         self.albums_menu = self.menuBar().addMenu("&Albums")
         self.albums_menu.aboutToShow.connect(self._fill_albums_menu)
         self._fill_albums_menu()
@@ -252,6 +301,15 @@ class MainWindow(QMainWindow):
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self.cancel_scan)
         bar.addWidget(self.status_label, 1)
+        self.size_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.size_slider.setRange(0, len(THUMBNAIL_LEVELS) - 1)
+        self.size_slider.setFixedWidth(90)
+        self.size_slider.setToolTip("Thumbnail size")
+        self.size_slider.setValue(THUMBNAIL_LEVELS.index(self.grid.thumbnail_size))
+        self.size_slider.valueChanged.connect(
+            lambda i: self.grid.set_thumbnail_size(THUMBNAIL_LEVELS[i])
+        )
+        bar.addPermanentWidget(self.size_slider)
         bar.addPermanentWidget(self.progress)
         bar.addPermanentWidget(self.cancel_button)
 
@@ -312,6 +370,8 @@ class MainWindow(QMainWindow):
     def _update_bars(self) -> None:
         in_grid = bool(self.sources) and self.pages.currentIndex() != PAGE_VIEWER
         self.filter_bar.setVisible(in_grid)
+        self.sidebar.setVisible(self.sidebar_action.isChecked() and bool(self.sources))
+        self._sync_sidebar_selection()
         self.album_bar.setVisible(in_grid and self.album is not None)
         if self.album is not None:
             self.album_label.setText(f"Album: <b>{html_escape(self.album.name)}</b>")
@@ -415,6 +475,47 @@ class MainWindow(QMainWindow):
             action.setChecked(self.album is not None and self.album.id == album.id)
             action.triggered.connect(lambda _checked=False, a=album: self.show_album(a))
 
+    def set_sidebar_visible(self, visible: bool) -> None:
+        self.sidebar.setVisible(visible and bool(self.sources))
+        value = "1" if visible else "0"
+        if not self.scanning and db.get_setting(self.conn, SIDEBAR_SETTING) != value:
+            db.set_setting(self.conn, SIDEBAR_SETTING, value)
+            self.conn.commit()
+
+    def refresh_sidebar(self) -> None:
+        self.sidebar.set_albums((a.id, a.name, a.photo_count) for a in db.list_albums(self.conn))
+        self.sidebar.set_sources((s.id, s.label) for s in self.sources)
+        self._sync_sidebar_selection()
+
+    def _sync_sidebar_selection(self) -> None:
+        f = self.filter_bar.filter()
+        if self.album is not None:
+            self.sidebar.set_current("album", self.album.id)
+        elif f.has_duplicates:
+            self.sidebar.set_current("duplicates")
+        elif len(f.source_ids) == 1:
+            self.sidebar.set_current("source", next(iter(f.source_ids)))
+        else:
+            self.sidebar.set_current("all")
+
+    def _sidebar_all_photos(self) -> None:
+        self.filter_bar.clear()
+        self.show_album(None)
+
+    def _sidebar_duplicates(self) -> None:
+        self.album = None
+        self.filter_bar.set_filter(db.PhotoFilter(has_duplicates=True))
+        self.show_album(None)
+
+    def _sidebar_album(self, album_id: int) -> None:
+        album = next((a for a in db.list_albums(self.conn) if a.id == album_id), None)
+        self.show_album(album)
+
+    def _sidebar_source(self, source_id: int) -> None:
+        self.album = None
+        self.filter_bar.set_filter(db.PhotoFilter(source_ids=frozenset({source_id})))
+        self.show_album(None)
+
     def show_album(self, album: db.Album | None) -> None:
         """Show one album in the grid, or all photos with ``None``. The filters still apply."""
         self.album = album
@@ -436,6 +537,7 @@ class MainWindow(QMainWindow):
                 self.album = current
                 self._update_bars()
                 self._show_photo_count()
+        self.refresh_sidebar()
 
     def selected_photo_ids(self) -> list[int]:
         ids = (self.grid_source.item(i) for i in self.grid.selected_indexes())
@@ -448,6 +550,7 @@ class MainWindow(QMainWindow):
         dialog = AddToAlbumDialog(self.conn, ids, self)
         dialog.exec()
         dialog.deleteLater()
+        self.refresh_sidebar()
 
     def remove_selection_from_album(self) -> None:
         ids = self.selected_photo_ids()
@@ -455,6 +558,7 @@ class MainWindow(QMainWindow):
             return
         db.remove_photos_from_album(self.conn, self.album.id, ids)
         self.album = next((a for a in db.list_albums(self.conn) if a.id == self.album.id), None)
+        self.refresh_sidebar()
         self.reload_grid()
 
     def _update_album_actions(self) -> None:
@@ -793,6 +897,7 @@ class MainWindow(QMainWindow):
         self.scan_state_changed.emit()
         self._update_empty_text()
         self._show_photo_count()
+        self.refresh_sidebar()
 
     # --- help ---------------------------------------------------------------------------
 

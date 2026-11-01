@@ -7,11 +7,12 @@ committed. Completed work is listed at the end, one line per task.
 
 Waves 1 and 2 are merged. Remaining V1 work:
 
-- [ ] Rerun the 100k bench on Windows and judge scrolling by eye
+- [ ] Rerun the 100k bench on Windows and judge scrolling by eye. Judged smooth by eye on Windows 11 (.exe, 100,000 plain photos, full scan about 10 minutes); `scripts/bench.py` numbers not yet taken on Windows
+- [ ] Retest "Show in Explorer" on Windows: the first Windows 11 test opened a default folder instead of the photo's (paths with spaces); fixed, untested on Windows
 
 ## Open from V0
 
-- [ ] Verify the Windows 10/11 `.exe` and its size (PRD §7.5 item 7). Must be done on real Windows, not WSL
+- [ ] Verify the Windows 10/11 `.exe` and its size (PRD §7.5 item 7). Must be done on real Windows, not WSL. Windows 11 done (49.4 MB, starts, scans plain and Takeout folders); Windows 10 still to test
 
 ## Completed
 
