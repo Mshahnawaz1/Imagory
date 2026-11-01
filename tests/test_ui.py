@@ -425,3 +425,14 @@ def test_sidebar_toggle_and_setting(qtbot, tmp_path, monkeypatch):
     window.sidebar_action.setChecked(True)
     assert db.get_setting(conn, mw.SIDEBAR_SETTING) == "1"
     assert window.sidebar.isHidden()  # no sources yet, so there is nothing to browse
+
+
+def test_sidebar_action_is_in_view_menu_not_toolbar(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAGORY_LIBRARY", str(tmp_path / "lib"))
+    window, conn = open_window(qtbot)
+    view_menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "&View")
+    assert window.sidebar_action in view_menu.actions()
+    assert window.sidebar_action.shortcut().toString() == "Ctrl+B"
+    assert window.sidebar_action not in window.toolbar.actions()
+    window.close()
+    conn.close()

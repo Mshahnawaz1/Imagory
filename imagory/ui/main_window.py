@@ -268,8 +268,6 @@ class MainWindow(QMainWindow):
         self.sidebar_action.toggled.connect(self.set_sidebar_visible)
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.sidebar_action)
-        toolbar.insertAction(self.add_action, self.sidebar_action)
-        toolbar.insertSeparator(self.add_action)
 
         self.albums_menu = self.menuBar().addMenu("&Albums")
         self.albums_menu.aboutToShow.connect(self._fill_albums_menu)
