@@ -114,7 +114,7 @@ def make_palette(c: Colours) -> QPalette:
         QPalette.ColorRole.ToolTipBase: c.forest,
         QPalette.ColorRole.ToolTipText: c.cream,
         QPalette.ColorRole.Highlight: c.selection,
-        QPalette.ColorRole.HighlightedText: c.cream if c is LIGHT else c.forest,
+        QPalette.ColorRole.HighlightedText: c.cream,
         QPalette.ColorRole.Link: c.selection,
     }
     for role, colour in roles.items():
@@ -144,7 +144,7 @@ QPushButton {{ background: {c.surface}; border: 1px solid {c.line}; border-radiu
     padding: 5px 12px; }}
 QPushButton:hover {{ background: {c.surface_alt}; }}
 QPushButton:default, QPushButton#primary {{ background: {c.forest}; color: {c.cream};
-    border-color: {c.forest}; padding: 7px 22px; }}
+    border-color: {c.forest}; padding: 5px 14px; }}
 QPushButton:disabled {{ color: {c.muted}; }}
 QLineEdit, QComboBox, QDateEdit {{ background: {c.surface}; border: 1px solid {c.line};
     border-radius: 6px; padding: 4px 8px; selection-background-color: {c.selection}; }}
@@ -152,6 +152,9 @@ QLineEdit:focus, QComboBox:focus, QDateEdit:focus {{ border-color: {c.selection}
 QComboBox QAbstractItemView {{ background: {c.surface}; border: 1px solid {c.line};
     selection-background-color: {c.forest}; selection-color: {c.cream}; }}
 QCheckBox {{ spacing: 6px; }}
+QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {c.muted};
+    border-radius: 3px; background: {c.surface}; }}
+QCheckBox::indicator:checked {{ background: {c.selection}; border-color: {c.selection}; }}
 QStatusBar {{ background: {c.surface}; border-top: 1px solid {c.line}; color: {c.muted}; }}
 QStatusBar::item {{ border: 0; }}
 QProgressBar {{ border: 1px solid {c.line}; border-radius: 4px; background: {c.surface_alt};
