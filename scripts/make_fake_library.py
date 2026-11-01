@@ -201,6 +201,21 @@ def _geo(lat: float, lon: float, alt: float) -> dict:
     }
 
 
+PEOPLE_POOL = ["Anna", "Ben", "Chloé", "Dev", "Emma", "Farid", "Grace", "Hiro", "Ines", "Jo"]
+CAPTIONS = ["Birthday party", "Beach day", "Road trip", "Family dinner", "Hiking", "Graduation"]
+
+
+def _make_meta(seed: int, rel: str) -> dict:
+    """People, caption and favourite flag for one photo. Uses its own random stream, so the
+    rest of the generated library does not change when this is tuned."""
+    rng = random.Random(f"{seed}:{rel}")
+    return {
+        "people": [{"name": n} for n in rng.sample(PEOPLE_POOL, rng.choice([0, 0, 1, 1, 2, 3]))],
+        "description": rng.choice(["", "", *CAPTIONS]),
+        "favorited": rng.random() < 0.1,
+    }
+
+
 def _make_geo(rng: random.Random) -> tuple[dict, dict]:
     """(geoData, geoDataExif): both real, both 0/0, or only one of them real."""
     real = _geo(
@@ -344,20 +359,25 @@ class _TakeoutPlan:
         self.taken.add(rel.lower())
         json_utc = _iso(utc) + "Z" if sidecar else None
         geo, geo_exif = _make_geo(rng)
+        meta = _make_meta(self.seed, rel)
+        uploaded = None
         payload = None
         if edited_from:
             geo = self.images[edited_from]["_geo"]
+            meta, uploaded = self.images[edited_from]["_meta"]
         elif sidecar:
             self.taken.add(side_rel.lower())
             created = utc + timedelta(seconds=rng.randrange(60, 90 * 86400))
             payload = {
                 "title": title,
-                "description": "",
+                "description": meta["description"],
                 "imageViews": str(rng.randrange(40)),
                 "creationTime": _timestamp(created),
                 "photoTakenTime": _timestamp(utc),
                 "geoData": geo,
                 "geoDataExif": geo_exif,
+                **({"people": meta["people"]} if meta["people"] else {}),
+                **({"favorited": True} if meta["favorited"] else {}),
                 "url": f"https://photos.google.com/photo/AF1Qip{rng.getrandbits(64):016x}",
                 "googlePhotosOrigin": {"mobileUpload": {"deviceType": "ANDROID_PHONE"}},
                 **(extra or {}),
@@ -367,6 +387,15 @@ class _TakeoutPlan:
         expected["geo"] = (
             {"latitude": geo["latitude"], "longitude": geo["longitude"]} if has_geo else None
         )
+        if payload:
+            uploaded = _iso(created)
+        has_meta = bool(sidecar or edited_from)
+        expected["people"] = sorted((p["name"] for p in meta["people"]), key=str.casefold)
+        expected["description"] = meta["description"] or None
+        expected["favorite"] = meta["favorited"]
+        expected["uploaded_utc"] = uploaded + "Z" if has_meta and uploaded else None
+        if not has_meta:
+            expected["people"], expected["description"], expected["favorite"] = [], None, False
         self.specs.append(
             {
                 "path": str(self.out / rel),
@@ -396,6 +425,7 @@ class _TakeoutPlan:
             "mtime_utc": _iso(utc) + "Z",
             "expected": expected,
             "_geo": geo,
+            "_meta": (meta, uploaded),
         }
         return rel
 
@@ -557,7 +587,10 @@ def make_takeout(out: Path, count: int, duplicates: float, seed: int) -> dict:
         "<!doctype html><title>Takeout</title>\n", encoding="utf-8"
     )
 
-    images = {r: {k: v for k, v in e.items() if k != "_geo"} for r, e in plan.images.items()}
+    images = {
+        r: {k: v for k, v in e.items() if k not in ("_geo", "_meta")}
+        for r, e in plan.images.items()
+    }
     counts: dict[str, int] = {"orphan_sidecars": len(orphans)}
     for e in images.values():
         for key in (f"quirk:{e['quirk']}", f"folder:{e['folder_kind']}", f"date:{e['date_case']}"):

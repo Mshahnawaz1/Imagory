@@ -457,6 +457,14 @@ class Scanner:
                 outcome, stored = "added", db.insert_file(self.conn, self.source.id, record, now)
         if sidecar is not None:
             db.set_photo_location(self.conn, stored, sidecar.latitude, sidecar.longitude)
+            db.set_photo_takeout_metadata(
+                self.conn,
+                stored,
+                sidecar.people,
+                sidecar.description,
+                sidecar.favorite,
+                sidecar.uploaded_utc,
+            )
         return outcome, stored
 
     def _batches(self, files: list[WalkedFile]) -> Iterator[list[FileJob]]:
