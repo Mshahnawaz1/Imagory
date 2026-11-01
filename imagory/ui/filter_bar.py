@@ -27,15 +27,17 @@ from imagory.db import PhotoFilter
 
 SOURCE_LABEL = "Sources"
 ALL_FOLDERS = "All folders"
+ANY_PERSON = "Any person"
 NO_DATE = QDate(1900, 1, 1)  # the minimum date stands for "not set" and shows "Any"
 # The calendar of an unset date opens on this day. A fixed day for now; it was 1900-01-01.
 CALENDAR_START = QDate(2026, 11, 1)
 
 SourceOptions = Iterable[tuple[int, str]]  # (source id, label)
+PersonOptions = Iterable[tuple[int, str, int]]  # (person id, name, photo count)
 
 
 class FilterBar(QWidget):
-    """Text, date range, source, folder, "Has duplicates" and "Missing" controls."""
+    """Text, date range, source, folder, person, "Has duplicates" and "Missing" controls."""
 
     filterChanged = Signal(PhotoFilter)
 
@@ -46,12 +48,15 @@ class FilterBar(QWidget):
         parent: QWidget | None = None,
         sources: Callable[[], SourceOptions] | None = None,
         folders: Callable[[int], list[str]] | None = None,
+        people: Callable[[], PersonOptions] | None = None,
     ) -> None:
         """``sources()`` returns ``(id, label)`` pairs; ``folders(source_id)`` returns
-        relative folder paths (``db.folder_paths``). Both are optional and can be set later."""
+        relative folder paths (``db.folder_paths``); ``people()`` returns ``(id, name, count)``
+        rows. All are optional and can be set later."""
         super().__init__(parent)
         self._sources_provider = sources
         self._folders_provider = folders
+        self._people_provider = people
         self._sources: list[tuple[int, str]] = []
         self._last = PhotoFilter()
         self._pending_folder: str | None = None
@@ -62,7 +67,7 @@ class FilterBar(QWidget):
         self._debounce.timeout.connect(self._emit_if_changed)
 
         self._text = QLineEdit()
-        self._text.setPlaceholderText("Search file names and folders")
+        self._text.setPlaceholderText("Search file names, folders, people and captions")
         self._text.setClearButtonEnabled(True)
         self._text.textChanged.connect(lambda _text: self._debounce.start())
 
@@ -85,6 +90,16 @@ class FilterBar(QWidget):
         )
         self._folder.currentIndexChanged.connect(self._on_changed)
 
+        self._person = QComboBox()
+        self._person.setToolTip("Only photos tagged with this person (from Google Takeout)")
+        self._person.setMinimumContentsLength(12)
+        self._person.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._person.addItem(ANY_PERSON, None)
+        self._person.setVisible(False)  # shown once there are people
+        self._person.currentIndexChanged.connect(self._on_changed)
+
         self._duplicates = QCheckBox("Has duplicates")
         self._duplicates.toggled.connect(self._on_changed)
         self._missing = QCheckBox("Missing")
@@ -101,6 +116,7 @@ class FilterBar(QWidget):
         top.addWidget(self._text, 1)
         top.addWidget(self._source_button)
         top.addWidget(self._folder)
+        top.addWidget(self._person)
         top.addWidget(QLabel("Date"))
         top.addWidget(self._date_from)
         top.addWidget(QLabel("to"))
@@ -136,6 +152,7 @@ class FilterBar(QWidget):
             folder=(source_ids[0], folder) if folder and len(source_ids) == 1 else None,
             has_duplicates=self._duplicates.isChecked(),
             missing=self._missing.isChecked(),
+            person_id=self._person.currentData(),
         )
 
     def set_filter(self, f: PhotoFilter) -> None:
@@ -153,6 +170,8 @@ class FilterBar(QWidget):
         for action in self._source_menu.actions():
             with QSignalBlocker(action):
                 action.setChecked(action.data() in source_ids)
+        with QSignalBlocker(self._person):
+            self._person.setCurrentIndex(max(self._person.findData(f.person_id), 0))
         with QSignalBlocker(self._duplicates):
             self._duplicates.setChecked(f.has_duplicates)
         with QSignalBlocker(self._missing):
@@ -180,15 +199,39 @@ class FilterBar(QWidget):
         self._reload_folders()
         self._emit_if_changed()
 
+    def set_people(self, people: PersonOptions) -> None:
+        """Replace the person choices. The chosen person stays if they are still listed;
+        otherwise the person filter is dropped. The control is hidden when there are none."""
+        keep = self._person.currentData()
+        with QSignalBlocker(self._person):
+            self._person.clear()
+            self._person.addItem(ANY_PERSON, None)
+            for person_id, name, count in people:
+                self._person.addItem(f"{name}  ({count:,})", person_id)
+            self._person.setCurrentIndex(max(self._person.findData(keep), 0))
+        self._person.setVisible(self._person.count() > 1)
+        self._update_widgets()
+        self._emit_if_changed()
+
+    def person_name(self, person_id: int | None) -> str | None:
+        """The listed name of a person, without the count."""
+        index = self._person.findData(person_id) if person_id is not None else -1
+        if index < 0:
+            return None
+        return self._person.itemText(index).rsplit("  (", 1)[0]
+
     def set_providers(
         self,
         sources: Callable[[], SourceOptions] | None = None,
         folders: Callable[[int], list[str]] | None = None,
+        people: Callable[[], PersonOptions] | None = None,
     ) -> None:
         if sources is not None:
             self._sources_provider = sources
         if folders is not None:
             self._folders_provider = folders
+        if people is not None:
+            self._people_provider = people
         self.refresh_options()
 
     def refresh_options(self) -> None:
@@ -197,6 +240,8 @@ class FilterBar(QWidget):
             self.set_sources(self._sources_provider())
         else:
             self._reload_folders()
+        if self._people_provider is not None:
+            self.set_people(self._people_provider())
 
     # --- internals -----------------------------------------------------------------------
 
@@ -291,6 +336,11 @@ class FilterBar(QWidget):
             chips.append((", ".join(checked), self._uncheck_sources))
         if self._folder_data():
             chips.append((self._folder_data(), lambda: self._folder.setCurrentIndex(0)))
+        person_id = self._person.currentData()
+        if person_id is not None:
+            chips.append(
+                (self.person_name(person_id) or "Person", lambda: self._person.setCurrentIndex(0))
+            )
         if self._duplicates.isChecked():
             chips.append(("Has duplicates", lambda: self._duplicates.setChecked(False)))
         if self._missing.isChecked():

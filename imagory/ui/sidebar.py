@@ -1,6 +1,6 @@
-"""The left sidebar: All photos, Duplicates, albums, and sources. It owns no database access.
+"""The left sidebar: All photos, Duplicates, people, albums, and sources. No database access.
 
-The window feeds it albums and sources through setters and listens to its signals.
+The window feeds it albums, people and sources through setters and listens to its signals.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ class Sidebar(QFrame):
     allPhotosRequested = Signal()
     duplicatesRequested = Signal()
     albumRequested = Signal(int)  # album id
+    personRequested = Signal(int)  # person id
     sourceRequested = Signal(int)  # source id
     manageAlbumsRequested = Signal()
     manageSourcesRequested = Signal()
@@ -42,6 +43,8 @@ class Sidebar(QFrame):
         self._list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._list.itemClicked.connect(self._on_clicked)
         self._albums: list[tuple[int, str, int]] = []
+        self._people: list[tuple[int, str, int]] = []
+        self._people_enabled = True
         self._sources: list[tuple[int, str]] = []
         self._current: tuple[str, int | None] = ("all", None)
 
@@ -64,13 +67,25 @@ class Sidebar(QFrame):
         self._albums = list(albums)
         self._rebuild()
 
+    def set_people(self, people: Iterable[tuple[int, str, int]]) -> None:
+        """``(person id, name, photo count)`` rows. The People section is hidden when empty."""
+        self._people = list(people)
+        self._rebuild()
+
+    def set_people_enabled(self, enabled: bool) -> None:
+        """People are read-only data, but like albums they are locked while a scan runs."""
+        if enabled != self._people_enabled:
+            self._people_enabled = enabled
+            self._rebuild()
+
     def set_sources(self, sources: Iterable[tuple[int, str]]) -> None:
         """``(source id, label)`` rows."""
         self._sources = list(sources)
         self._rebuild()
 
     def set_current(self, kind: str, value: int | None = None) -> None:
-        """Highlight ``"all"``, ``"duplicates"``, ``("album", id)`` or ``("source", id)``."""
+        """Highlight ``"all"``, ``"duplicates"``, or a kind (``"album"``, ``"person"``,
+        ``"source"``) with its id."""
         self._current = (kind, value)
         self._select_current()
 
@@ -85,11 +100,20 @@ class Sidebar(QFrame):
         item.setSizeHint(QSize(0, 30))
         self._list.setItemWidget(item, label)
 
-    def _add(self, text: str, kind: str, value: int | None = None, muted: bool = False) -> None:
+    def _add(
+        self,
+        text: str,
+        kind: str,
+        value: int | None = None,
+        muted: bool = False,
+        enabled: bool = True,
+    ) -> None:
         item = QListWidgetItem(text)
         item.setData(KIND_ROLE, kind)
         item.setData(VALUE_ROLE, value)
-        if muted:
+        if not enabled:
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+        if muted or not enabled:
             item.setForeground(self.palette().placeholderText())
         self._list.addItem(item)
 
@@ -99,6 +123,10 @@ class Sidebar(QFrame):
         self._heading("Library")
         self._add("All photos", "all")
         self._add("Duplicates", "duplicates")
+        if self._people:
+            self._heading("People")
+            for person_id, name, count in self._people:
+                self._add(f"{name}   {count:,}", "person", person_id, enabled=self._people_enabled)
         self._heading("Albums")
         for album_id, name, count in self._albums:
             self._add(f"{name}   {count:,}", "album", album_id)
@@ -129,6 +157,8 @@ class Sidebar(QFrame):
             self.duplicatesRequested.emit()
         elif kind == "album":
             self.albumRequested.emit(value)
+        elif kind == "person":
+            self.personRequested.emit(value)
         elif kind == "source":
             self.sourceRequested.emit(value)
         else:

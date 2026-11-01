@@ -45,9 +45,10 @@ def photo_matches(f: db.PhotoFilter, photo: GridPhoto) -> bool:
 
     Mirrors the text, date, source and folder filters of ``db.filtered_grid_photos`` on the
     row itself. Filters that need the database (duplicates, missing, album) reject the row;
-    the reload after the scan settles it.
+    the reload after the scan settles it (people are linked by the scan thread, so a person
+    filter rejects rows too).
     """
-    if f.missing or f.has_duplicates or f.album_id is not None:
+    if f.missing or f.has_duplicates or f.album_id is not None or f.person_id is not None:
         return False
     if f.source_ids and photo.source_id not in f.source_ids:
         return False

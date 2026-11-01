@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
             self,
             sources=lambda: [(s.id, s.label) for s in self.sources],
             folders=lambda source_id: db.folder_paths(self.conn, source_id),
+            people=self._people_rows,
         )
         self.filter_bar.filterChanged.connect(self._on_filter_changed)
         self.album_bar = self._build_album_bar()
@@ -206,6 +207,7 @@ class MainWindow(QMainWindow):
         self.sidebar.allPhotosRequested.connect(self._sidebar_all_photos)
         self.sidebar.duplicatesRequested.connect(self._sidebar_duplicates)
         self.sidebar.albumRequested.connect(self._sidebar_album)
+        self.sidebar.personRequested.connect(self._sidebar_person)
         self.sidebar.sourceRequested.connect(self._sidebar_source)
         self.sidebar.manageAlbumsRequested.connect(self.show_albums)
         self.sidebar.manageSourcesRequested.connect(self.show_sources)
@@ -518,7 +520,14 @@ class MainWindow(QMainWindow):
             db.set_setting(self.conn, SIDEBAR_SETTING, value)
             self.conn.commit()
 
+    def _people_rows(self) -> list[tuple[int, str, int]]:
+        return [(p.id, p.name, p.photo_count) for p in db.list_people(self.conn)]
+
     def refresh_sidebar(self) -> None:
+        people = self._people_rows()
+        self.sidebar.set_people(people)
+        self.sidebar.set_people_enabled(not self.scanning)
+        self.filter_bar.set_people(people)
         self.sidebar.set_albums((a.id, a.name, a.photo_count) for a in db.list_albums(self.conn))
         self.sidebar.set_sources((s.id, s.label) for s in self.sources)
         self._sync_sidebar_selection()
@@ -527,6 +536,8 @@ class MainWindow(QMainWindow):
         f = self.filter_bar.filter()
         if self.album is not None:
             self.sidebar.set_current("album", self.album.id)
+        elif f.person_id is not None:
+            self.sidebar.set_current("person", f.person_id)
         elif f.has_duplicates:
             self.sidebar.set_current("duplicates")
         elif len(f.source_ids) == 1:
@@ -546,6 +557,13 @@ class MainWindow(QMainWindow):
     def _sidebar_album(self, album_id: int) -> None:
         album = next((a for a in db.list_albums(self.conn) if a.id == album_id), None)
         self.show_album(album)
+
+    def _sidebar_person(self, person_id: int) -> None:
+        """Show one person's photos. Like an album, it combines with the other filters."""
+        if self.scanning:
+            return
+        self.filter_bar.set_filter(replace(self.filter_bar.filter(), person_id=person_id))
+        self._sync_sidebar_selection()
 
     def _sidebar_source(self, source_id: int) -> None:
         self.album = None
@@ -850,6 +868,7 @@ class MainWindow(QMainWindow):
         self.sources_action.setEnabled(bool(self.sources))
         self.empty.button.setEnabled(idle)
         self._update_album_actions()
+        self.sidebar.set_people_enabled(idle)
 
     def rescan(self) -> None:
         self.rescan_sources(self.sources)
