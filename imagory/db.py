@@ -184,7 +184,37 @@ def _migration_3(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_1, _migration_2, _migration_3]
+def _migration_4(conn: sqlite3.Connection) -> None:
+    """People and Takeout metadata (PRD §8.9). Photos already scanned keep empty values."""
+    _execute_script(
+        conn,
+        """
+        ALTER TABLE photos ADD COLUMN description TEXT;
+        ALTER TABLE photos ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE photos ADD COLUMN uploaded_at_utc TEXT;
+
+        CREATE TABLE people (
+            id   INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE
+        );
+
+        CREATE TABLE photo_people (
+            photo_id  INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            PRIMARY KEY (photo_id, person_id)
+        );
+
+        CREATE INDEX idx_photo_people_person_id ON photo_people(person_id);
+        """,
+    )
+
+
+MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
+    _migration_1,
+    _migration_2,
+    _migration_3,
+    _migration_4,
+]
 SCHEMA_VERSION = len(MIGRATIONS)
 # V0 and development databases (versions 1 and 2) were never released and are replaced.
 FIRST_SUPPORTED_VERSION = 3
@@ -954,6 +984,68 @@ def refresh_photos(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> int:
     return deleted
 
 
+# --- people (PRD §8.9) --------------------------------------------------------------------
+
+
+def set_photo_takeout_metadata(
+    conn: sqlite3.Connection,
+    file_id: int,
+    people: Iterable[str],
+    description: str | None,
+    favorite: bool,
+    uploaded_at_utc: str | None,
+) -> None:
+    """Store Takeout people and metadata on the photo of a file, merging with what is there.
+
+    People are only ever added (a photo found in several places has the union of the names).
+    The first non-empty caption and upload time are kept; a photo is a favourite if any copy is.
+    """
+    row = conn.execute("SELECT photo_id FROM files WHERE id = ?", (file_id,)).fetchone()
+    if row is None or row[0] is None:
+        return
+    photo_id = row[0]
+    for name in people:
+        conn.execute("INSERT OR IGNORE INTO people (name) VALUES (?)", (name,))
+        conn.execute(
+            "INSERT OR IGNORE INTO photo_people (photo_id, person_id) "
+            "SELECT ?, id FROM people WHERE name = ?",
+            (photo_id, name),
+        )
+    conn.execute(
+        "UPDATE photos SET description = COALESCE(NULLIF(description, ''), ?), "
+        "favorite = MAX(favorite, ?), uploaded_at_utc = COALESCE(uploaded_at_utc, ?) "
+        "WHERE id = ?",
+        (description, 1 if favorite else 0, uploaded_at_utc, photo_id),
+    )
+
+
+@dataclass(frozen=True)
+class Person:
+    id: int
+    name: str
+    photo_count: int  # photos with at least one copy that is ok
+
+
+def list_people(conn: sqlite3.Connection) -> list[Person]:
+    """People with at least one visible photo, most photos first, then by name."""
+    rows = conn.execute(
+        "SELECT pe.id, pe.name, COUNT(*) AS n FROM people pe "
+        "JOIN photo_people pp ON pp.person_id = pe.id "
+        "WHERE EXISTS (SELECT 1 FROM files k WHERE k.photo_id = pp.photo_id AND k.status = 'ok') "
+        "GROUP BY pe.id ORDER BY n DESC, pe.name COLLATE NOCASE"
+    )
+    return [Person(r[0], r[1], r[2]) for r in rows]
+
+
+def people_for_photo(conn: sqlite3.Connection, photo_id: int) -> list[str]:
+    rows = conn.execute(
+        "SELECT pe.name FROM people pe JOIN photo_people pp ON pp.person_id = pe.id "
+        "WHERE pp.photo_id = ? ORDER BY pe.name COLLATE NOCASE",
+        (photo_id,),
+    )
+    return [r[0] for r in rows]
+
+
 # --- albums -----------------------------------------------------------------------------
 # Manual albums (PRD §8.8). Albums are a user action outside scans. Membership rows go away
 # through ON DELETE CASCADE when an album or a photo is deleted; photos are never touched.
@@ -1119,6 +1211,7 @@ class PhotoFilter:
     has_duplicates: bool = False  # more than one file row
     missing: bool = False  # show only photos whose files are all missing
     album_id: int | None = None  # only photos in this album
+    person_id: int | None = None  # only photos tagged with this person (Takeout, PRD §8.9)
 
     @property
     def is_empty(self) -> bool:
@@ -1166,8 +1259,16 @@ def _filter_sql(f: PhotoFilter, ordered: bool = False) -> tuple[str, list]:
             file_conds.append("c.relative_path LIKE ? ESCAPE '\\'")
             file_params.append(_like_escape(prefix) + "/%")
     for word in f.text.split():
-        file_conds.append("c.relative_path LIKE ? ESCAPE '\\'")
-        file_params.append(f"%{_like_escape(word)}%")
+        # A word matches the path of this copy, or a person name or the caption of the photo.
+        file_conds.append(
+            "(c.relative_path LIKE ? ESCAPE '\\' "
+            "OR EXISTS (SELECT 1 FROM photo_people tp JOIN people tn ON tn.id = tp.person_id "
+            "WHERE tp.photo_id = c.photo_id AND tn.name LIKE ? ESCAPE '\\') "
+            "OR EXISTS (SELECT 1 FROM photos td WHERE td.id = c.photo_id "
+            "AND td.description LIKE ? ESCAPE '\\'))"
+        )
+        like = f"%{_like_escape(word)}%"
+        file_params.extend((like, like, like))
     if file_conds:
         if not f.missing:
             file_conds.append("c.status = 'ok'")
@@ -1192,6 +1293,11 @@ def _filter_sql(f: PhotoFilter, ordered: bool = False) -> tuple[str, list]:
             "EXISTS (SELECT 1 FROM album_photos ap WHERE ap.album_id = ? AND ap.photo_id = p.id)"
         )
         params.append(f.album_id)
+    if f.person_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM photo_people pq WHERE pq.person_id = ? AND pq.photo_id = p.id)"
+        )
+        params.append(f.person_id)
     if f.has_duplicates:
         where.append("EXISTS (SELECT 1 FROM files d WHERE d.photo_id = p.id AND d.id <> f.id)")
 
@@ -1281,6 +1387,10 @@ class PhotoInfo:
     format: str | None
     primary: PhotoLocation | None  # None when the photo has no file rows at all
     others: tuple[PhotoLocation, ...]  # the other copies ("Also found in...")
+    people: tuple[str, ...] = ()  # Takeout people names (PRD §8.9)
+    description: str | None = None
+    favorite: bool = False
+    uploaded_at_utc: str | None = None
 
 
 def photo_info(conn: sqlite3.Connection, photo_id: int) -> PhotoInfo | None:
@@ -1290,7 +1400,7 @@ def photo_info(conn: sqlite3.Connection, photo_id: int) -> PhotoInfo | None:
     """
     row = conn.execute(
         "SELECT taken_at_local, date_source, latitude, longitude, width, height, format, "
-        "primary_file_id FROM photos WHERE id = ?",
+        "primary_file_id, description, favorite, uploaded_at_utc FROM photos WHERE id = ?",
         (photo_id,),
     ).fetchone()
     if row is None:
@@ -1320,6 +1430,10 @@ def photo_info(conn: sqlite3.Connection, photo_id: int) -> PhotoInfo | None:
         row["format"],
         primary,
         tuple(others),
+        tuple(people_for_photo(conn, photo_id)),
+        row["description"],
+        bool(row["favorite"]),
+        row["uploaded_at_utc"],
     )
 
 

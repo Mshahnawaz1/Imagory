@@ -345,6 +345,10 @@ class Sidecar:
     taken_utc: str | None  # the same moment as ISO 8601 ending in Z
     latitude: float | None  # None when geoData is missing or 0/0
     longitude: float | None
+    people: tuple[str, ...] = ()  # names tagged in Google Photos (PRD §8.9)
+    description: str | None = None  # the caption
+    favorite: bool = False
+    uploaded_utc: str | None = None  # creationTime as ISO 8601 ending in Z
 
 
 def _number(value: object) -> float | None:
@@ -384,6 +388,40 @@ def _location(data: dict) -> tuple[float | None, float | None]:
     return lat, lon
 
 
+MAX_PEOPLE = 100
+MAX_NAME_LENGTH = 200
+MAX_DESCRIPTION_LENGTH = 5000
+
+
+def _people(data: dict) -> tuple[str, ...]:
+    """Person names: trimmed, blanks dropped, duplicates (ignoring case) collapsed, capped."""
+    raw = data.get("people")
+    if not isinstance(raw, list):
+        return ()
+    names: dict[str, str] = {}
+    for entry in raw:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str):
+            continue
+        name = " ".join(name.split())[:MAX_NAME_LENGTH].strip()
+        if name:
+            names.setdefault(name.casefold(), name)
+        if len(names) >= MAX_PEOPLE:
+            break
+    return tuple(names.values())
+
+
+def _uploaded(data: dict) -> str | None:
+    created = data.get("creationTime")
+    seconds = _number(created.get("timestamp")) if isinstance(created, dict) else None
+    if seconds is None or seconds <= 0:
+        return None
+    try:
+        return to_utc_iso(datetime.fromtimestamp(int(seconds), UTC))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def parse_sidecar(data: object) -> Sidecar | None:
     """Pull the fields Imagory needs out of decoded sidecar JSON; None if it is not an object."""
     if not isinstance(data, dict):
@@ -391,7 +429,21 @@ def parse_sidecar(data: object) -> Sidecar | None:
     title = data.get("title")
     seconds, utc = _taken(data)
     lat, lon = _location(data)
-    return Sidecar(title if isinstance(title, str) else None, seconds, utc, lat, lon)
+    description = data.get("description")
+    description = (
+        description.strip()[:MAX_DESCRIPTION_LENGTH] if isinstance(description, str) else ""
+    )
+    return Sidecar(
+        title if isinstance(title, str) else None,
+        seconds,
+        utc,
+        lat,
+        lon,
+        people=_people(data),
+        description=description or None,
+        favorite=data.get("favorited") is True,
+        uploaded_utc=_uploaded(data),
+    )
 
 
 def read_sidecar(path: Path | str) -> Sidecar | None:
