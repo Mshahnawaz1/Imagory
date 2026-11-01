@@ -11,3 +11,4 @@ dist/
 .fake-library*/
 .bench-library/
 agents_docs/
+.claude/
