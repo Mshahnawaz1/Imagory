@@ -17,6 +17,8 @@ later without rescanning. Exact duplicates show once, moved files are recognised
 dates come from EXIF (with its time zone when known) or the filename. Takeout dates,
 albums, and search are still to come in the app (see [PRD.md](PRD.md)).
 
+[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/mshahnawaz1/imagory?utm_source=readme&utm_medium=badge)
+
 ## Using Imagory
 
 1. Start Imagory and click **Add a folder…** (or **Add source…** later). Give the source a
