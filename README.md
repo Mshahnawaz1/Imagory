@@ -20,6 +20,8 @@ has a People section, and you can search and filter by person (names are only co
 Takeout, Imagory does no face recognition). Photos scanned before this feature get names
 once their source is removed and added again. See [PRD.md](PRD.md).
 
+[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/mshahnawaz1/imagory?utm_source=readme&utm_medium=badge)
+
 ## Using Imagory
 
 1. Start Imagory and click **Add a folder…** (or **Add source…** later). Give the source a
