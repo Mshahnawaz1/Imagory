@@ -60,6 +60,7 @@ Imagory is a free, open source, fully offline Windows application that helps non
 | **V0** | Pick a directory, scan it, preview images, store image data in SQLite | Confirmed |
 | **V1** | Multiple sources, Takeout folder import, exact duplicate detection, month-grouped thumbnail grid, photo viewer, search and filters, manual albums | Confirmed |
 | **V1.x** | Zipped folder build published alongside the single .exe | Confirmed, timing flexible |
+| **V1.x** | Editable people: rename, merge, add or remove photos, delete (section 14) | Proposed, **needs planning** |
 | **V1.5** | Takeout import from .zip files, including multi-part exports | Confirmed as after V1 |
 | **V2** | Face detection and recognition as a separate downloadable extension | Proposed, details not confirmed |
 
@@ -254,10 +255,10 @@ Google Photos stores the names you tagged in a photo in its Takeout sidecar (`pe
 - **Never removed automatically** (principle 4): a rescan only adds names. If a name was removed in Google Photos before the export, a photo scanned earlier keeps the old name; this is accepted for now.
 - **Caption and favourite:** the first non-empty caption is kept; a photo is a favourite if any copy is.
 - **Existing libraries:** no backfill. A normal scan skips unchanged files, so photos scanned before this feature get names only when they are scanned again. While Imagory is in development, remove the Takeout source (or delete the library folder) and add it again.
-- **People section:** the sidebar's Library group gets a "People" section listing each person with their photo count, most photos first. Clicking a person opens the usual grid and month headers filtered to that person (combined with AND with the other filters, like an album). Only people with at least one visible photo are listed. Disabled during scans, like albums.
+- **People section:** the sidebar gets a "People" section of its own (like Albums and Sources, with a clickable header that collapses it; closed by default) listing each person with their photo count, most photos first. Clicking a person opens the usual grid and month headers filtered to that person (combined with AND with the other filters, like an album). Only people with at least one visible photo are listed. With none, the open section shows "No people yet". Albums and Sources collapse the same way. Disabled during scans, like albums.
 - **Filter bar:** a person control sets the same filter and shows as a chip.
 - **Search:** the text box also matches person names and captions.
-- **Out of scope:** renaming, merging, or deleting people, a Favourites filter, and anything face-based (V2).
+- **Out of scope:** renaming, merging, or deleting people, adding or removing a person's photos by hand (planned for V1.x, section 14), a Favourites filter, and anything face-based (V2).
 - **Privacy:** names are personal data stored only in the local database. Nothing is sent anywhere.
 
 ## 9. Data model (SQLite)
@@ -348,6 +349,15 @@ settings     key, value
 ## 14. Proposed future work
 
 **V1.5, Takeout zips.** Support multi-part zip exports, where a photo and its JSON sidecar can land in different parts. The approach (read inside zips, or extract into an app-managed folder) is undecided.
+
+**V1.x, editable people (needs planning).** V1 shows the people names read from Takeout and cannot change them (section 8.9). A later V1.x release should let the user correct them by hand. This is flagged as needing planning because the design below is only a first sketch, and nothing is decided.
+
+- Wanted actions: rename a person, merge people who were wrongly split (for example "Ana" and "Anna"), add photos to or remove photos from a person, and delete a person.
+- Manual edits must survive rescans. Today a scan only adds names from sidecars, so it would re-add a photo the user removed and recreate a name the user merged away.
+- First sketch: mark each person-to-photo link as `takeout` or `manual`, record manually removed links so the scanner skips them, and keep an alias table (old name to person) so a merged name is not recreated. This needs a new numbered migration.
+- The UI keeps the People sidebar section. Opening a person works like an album view, with add, remove, and merge actions. Albums stay a separate feature: storing people inside the albums tables was considered and rejected, because scans never touch albums, while they do touch people.
+- Open questions: how a manual edit is undone, whether a merge can be reversed, and how this joins up with the merge, split, and rename UI that V2 needs (so it is built once).
+- Deleting a person removes only the link rows, never photos, and needs a confirmation (principle 4).
 
 **V2, faces as an extension.**
 
@@ -444,6 +454,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Date recompute | "Change type…" in the Sources dialog calls `sources.change_source_type`, which sets the type and recomputes dates in one transaction (no photo re-read, Trash rule not applied retroactively), then reloads the grid and reports how many files changed. A Takeout source needs its folder present; otherwise the user is warned and neither the type nor the dates change. Disabled during scans |
 | Filter and album view | The album view is the filter with `album_id` set, so they combine with AND; the filter bar has no album control. Scan-added rows are checked by `photo_matches`, which rejects rows for filters needing the database (missing, duplicates, album) until the end-of-scan reload. A filter or album change resets the scroll; "Remove from album" needs no confirmation; the status bar shows the filtered count only |
 | Viewer | Zoom is relative to fit (up to 16x); zooming past fit loads the full-resolution image. The info panel is hidden by default (`I` key or Info button). Show in Explorer acts on the primary copy: `explorer /select,"<path>"` on Windows, passed as a command line so only the path is quoted (an argument list quotes the whole switch when the path has a space, and Explorer then opens a default folder, found on Windows 11), `wslpath` plus `explorer.exe` on WSL, otherwise the containing folder opens. The fix is untested on real Windows |
+| Editable people | Not in V1: people from Takeout are read-only. Planned for V1.x and flagged as needing planning (section 14). Considered and rejected: storing people as albums, because a rescan would undo manual edits (scans touch people but never albums) |
 
 ## 17. Risks
 

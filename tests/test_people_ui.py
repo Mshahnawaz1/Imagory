@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QMessageBox, QPushButton  # noqa: E402
 
 from imagory import db, paths  # noqa: E402
 from imagory.ui import main_window as mw  # noqa: E402
-from imagory.ui.sidebar import KIND_ROLE, VALUE_ROLE  # noqa: E402
+from imagory.ui.sidebar import KIND_ROLE, SECTION_ROLE, VALUE_ROLE  # noqa: E402
 from tests.imaging import make_image  # noqa: E402
 
 
@@ -48,6 +48,7 @@ def tag(conn, relative_path: str, *names: str) -> None:
 
 
 def person_items(window):
+    window.sidebar.set_section_expanded("people", True)
     lst = window.sidebar._list
     return [lst.item(i) for i in range(lst.count()) if lst.item(i).data(KIND_ROLE) == "person"]
 
@@ -147,3 +148,42 @@ def test_photo_matches_rejects_person_filter(window):
     photo = window.photos[0]
     assert photo_matches(db.PhotoFilter(), photo)
     assert not photo_matches(db.PhotoFilter(person_id=1), photo)
+
+
+def section_header(window, key):
+    lst = window.sidebar._list
+    for i in range(lst.count()):
+        if lst.item(i).data(KIND_ROLE) == "section" and lst.item(i).data(SECTION_ROLE) == key:
+            return lst.item(i)
+    raise AssertionError(key)
+
+
+def test_people_section_is_collapsible_and_starts_closed(window):
+    tag(window.conn, "0.jpg", "Anna")
+    window.refresh_sidebar()
+    sidebar = window.sidebar
+    lst = sidebar._list
+    kinds = lambda: [lst.item(i).data(KIND_ROLE) for i in range(lst.count())]  # noqa: E731
+
+    assert not sidebar.is_section_expanded("people")
+    assert "person" not in kinds()
+
+    sidebar._on_clicked(section_header(window, "people"))
+    assert "person" in kinds()
+    sidebar._on_clicked(section_header(window, "people"))
+    assert "person" not in kinds()
+
+    sidebar._on_clicked(section_header(window, "albums"))  # albums and sources collapse too
+    assert not sidebar.is_section_expanded("albums")
+
+
+def test_highlight_stays_on_clicked_section_header(window):
+    sidebar = window.sidebar
+    sidebar._on_clicked(section_header(window, "albums"))
+    selected = sidebar._list.selectedItems()
+    assert [i.data(SECTION_ROLE) for i in selected] == ["albums"]
+    sidebar._on_clicked(section_header(window, "sources"))
+    selected = sidebar._list.selectedItems()
+    assert [i.data(SECTION_ROLE) for i in selected] == ["sources"]
+    sidebar.set_current("all")  # a real view change moves the highlight back
+    assert [i.data(KIND_ROLE) for i in sidebar._list.selectedItems()] == ["all"]
