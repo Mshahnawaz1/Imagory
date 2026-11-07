@@ -211,9 +211,14 @@ class DirectoryMatch:
 
 
 def match_directory(
-    names: Iterable[str], read_title: Callable[[str], str | None] | None = None
+    names: Iterable[str],
+    read_title: Callable[[str], str | None] | None = None,
+    is_media: Callable[[str], bool] | None = None,
 ) -> DirectoryMatch:
     """Map each supported image name in one folder to its sidecar JSON name, or None.
+
+    ``is_media(name)`` chooses which names are matched instead of the supported image
+    extensions (Takeout cleanup matches videos and other files this way); default unchanged.
 
     ``names`` are the file names (not paths) in the folder. ``read_title(json_name)`` may
     return the sidecar's ``title`` (the original file name). It is called lazily, only to
@@ -230,7 +235,10 @@ def match_directory(
        uses its original's sidecar. It does not claim it exclusively.
     """
     all_names = list(names)
-    images = sorted(n for n in all_names if extension_of(n) in SUPPORTED_EXTENSIONS)
+    if is_media is None:
+        images = sorted(n for n in all_names if extension_of(n) in SUPPORTED_EXTENSIONS)
+    else:
+        images = sorted(n for n in all_names if is_media(n))
     index = _SidecarIndex(n for n in all_names if n.casefold().endswith(SIDECAR_SUFFIX))
     titles: dict[int, str | None] = {}
 
