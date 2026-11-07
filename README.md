@@ -9,7 +9,9 @@ extracted Google Takeout exports and get one fast, browsable library.
 > no telemetry, no accounts, no update checks. It only *reads* your photos. It never
 > changes, moves, renames, or deletes them, and never writes anything into your photo
 > folders. Everything it stores (database, thumbnails, logs) stays on your computer in
-> its own library folder.
+> its own library folder. The one exception is **Clean up Takeout**, which writes copies
+> only into an output folder you pick (an empty one, or an earlier cleanup output); the
+> original export is still only read.
 
 **Status: V1 in progress.** Add several photo folders as sources, scan them in the
 background, browse all their thumbnails in one grid, view photos, and reopen the library
@@ -17,7 +19,8 @@ later without rescanning. Exact duplicates show once, moved files are recognised
 dates come from EXIF (with its time zone when known) or the filename. Takeout dates,
 locations, and the people tagged in Google Photos are read from the JSON files. The sidebar
 has a People section, and you can search and filter by person (names are only copied from
-Takeout, Imagory does no face recognition). Photos scanned before this feature get names
+Takeout, Imagory does no face recognition). **Clean up Takeout** makes a
+deduplicated, sorted copy of an export without touching the original. Photos scanned before this feature get names
 once their source is removed and added again. See [PRD.md](PRD.md).
 
 [![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/mshahnawaz1/imagory?utm_source=readme&utm_medium=badge)
@@ -46,6 +49,42 @@ once their source is removed and added again. See [PRD.md](PRD.md).
 5. **Duplicates:** identical files (same contents, anywhere in your sources) appear once in
    the grid. Select photos with click, Ctrl-click, Shift-click, or Ctrl+A; the status bar
    shows how many are selected.
+6. **Clean up Takeout…** (toolbar or File menu) makes a tidy copy of an extracted Google
+   Takeout export. See below.
+
+### Cleaning up a Google Takeout export
+
+A Takeout export is messy: a JSON file next to every photo, the same photo in several
+album folders, truncated file names, and file dates that are just the time you unzipped
+it. **Clean up Takeout…** copies it into a new folder you choose:
+
+- one copy of each photo or video (exact duplicates are copied once), in `YYYY/MM`
+  folders by the date the photo was taken, or `Unknown date` when there is no real date;
+- the original file names from Google Photos, made safe for Windows;
+- no JSON files next to the photos. Their dates, places, people, captions and favourites
+  are kept in `.imagory\imagory.db` and in a plain-text `.imagory\metadata.json`, and the
+  albums are kept too. A report lists everything skipped, renamed or not copied.
+
+The wizard analyses the export first and shows what it will copy, how many duplicates it
+found and how much disk space it needs (about the size of the photos plus 5%). Nothing is
+copied until you click **Start copying**. Every copy is checked against the original
+before it counts as done. You can cancel at any time, and picking the same folders again
+carries on where it stopped. A second export (for example another Google account) can be
+added to the same output folder.
+
+**Your original export is never changed, moved or deleted.** When the wizard says it is
+safe to delete, every file in the export (except Trash) is accounted for in the copy, and
+you can delete the export yourself if you want to. Imagory never does it for you.
+
+**Add to library** adds the output folder as a source of type **cleaned** and creates its
+albums (an album whose name is already taken gets `(Takeout)` added). Photos in a cleaned
+source keep the dates and people from the export, and files with no real date stay
+undated instead of getting the unzip time. If the original export was already a source,
+Imagory then offers to remove it, after you confirm; photos keep their albums and people.
+Adding a cleanup output with **Add source…** works too. **Change type…** is not offered
+for a cleaned source, because its dates come from the cleanup, not from the folder.
+
+Like the rest of Imagory, the cleanup is fully offline.
 
 Supported formats: JPEG, PNG, GIF (first frame), and HEIC/HEIF. Photos are sorted newest
 first by the date the photo was taken (EXIF), then a date in the filename (such as
@@ -97,6 +136,12 @@ ground-truth `manifest.json`:
 
 ```sh
 uv run python scripts/make_fake_library.py .fake-library-takeout --takeout --count 2000
+```
+
+Time a Takeout cleanup of a generated export (the output goes into the scratch folder):
+
+```sh
+uv run python scripts/bench_cleanup.py /path/to/scratch --count 50000
 ```
 
 The V1 grid prototype (100,000 in-memory items with month headers):

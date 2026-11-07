@@ -10,12 +10,16 @@ Waves 1 and 2 are merged. Remaining V1 work:
 - [ ] Rerun the 100k bench on Windows and judge scrolling by eye. Judged smooth by eye on Windows 11 (.exe, 100,000 plain photos, full scan about 10 minutes); `scripts/bench.py` numbers not yet taken on Windows
 - [ ] Retest "Show in Explorer" on Windows: the first Windows 11 test opened a default folder instead of the photo's (paths with spaces); fixed, untested on Windows
 
-## Upcoming: Takeout cleanup
+## Takeout cleanup: Windows checks
 
-PRD §8.10. Plan and decisions: `docs/takeout-cleanup-plan.md`. Agent waves, contracts and
-ownership: `agents_docs/takeout-cleanup-todo.md`.
+The feature is merged (see Completed). Still to check on real Windows, not WSL:
 
-- [ ] Takeout cleanup (waves 0 to 4 in the agent todo)
+- [ ] Paths near 250 characters, and reserved names (`CON`, `NUL`, …) in the output
+- [ ] Copies' modified time on NTFS (set to the taken time; 1 µs tolerance on resume)
+- [ ] The wizard in light and dark theme, by eye
+- [ ] A full cleanup and Add to library from the `.exe`, and closing the app during a copy
+- [ ] `scripts/bench_cleanup.py` at 100,000 photos (only 50,000 on WSL so far)
+- [ ] A real Takeout export: title quirks and video sidecar matching (PRD §18 question 9)
 
 ## Open from V0
 
@@ -57,3 +61,4 @@ ownership: `agents_docs/takeout-cleanup-todo.md`.
   - §8.8 Albums menu, "Add to album" (toolbar and right-click), album view, "Remove from album", disabled during scans
   - §8.6 viewer zoom/pan, info panel, Show in Explorer, "Open in viewer" in the right-click menu
 - [x] People from Takeout: people, caption, favourite, upload time read from sidecars; People sidebar section, person filter and search, info panel rows (`docs/people/tasks.md`, PRD §8.9). Theme check by eye still open
+- [x] Takeout cleanup (PRD §8.10, `docs/takeout-cleanup-plan.md`, four agent waves): migration 5 and `cleaned` sources, planning, verified copy, `metadata.json` and report, fake Takeout cases, wizard, pipeline, main window wiring, benchmark (50,000 photos on WSL in about 6 minutes)

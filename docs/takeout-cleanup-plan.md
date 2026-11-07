@@ -65,6 +65,7 @@ This feature changes agreed scope, so the PRD must change in the same work:
 | Albums in the main library | Created once, when a run's output is added (scans never touch albums, as in §16). If an album with the same name (case-insensitive) already exists, a new album `<name> (Takeout)` is created instead, then `<name> (Takeout 2)` and so on. Existing albums are never changed (decided 2026-11-07) |
 | Concurrency | A `CleanupThread` (QThread) is the only writer of the output database. Worker processes hash, read metadata and make thumbnails, as in §6.2. The main library database is not touched until **Add to library**, which uses the normal `ScanThread`. Cleanup is disabled during a scan, and scanning and source actions are disabled during a cleanup |
 | Edits after cleanup | The output database is a record of the Takeout metadata. Album or people edits made later in the main library are not written back to it |
+| Implementation details | Decided during the agent waves (2026-11-07) and recorded in PRD §16: Migration 5, Cleanup provenance, Cleanup resume, Cleanup output database, Cleanup report, Cleanup wizard, Fake Takeout cleanup cases. PRD §8.4 now limits the mtime ban to dates that come from a Takeout |
 
 ## Pipeline
 
@@ -189,47 +190,48 @@ All text shown from sidecars is escaped, as in the info panel.
 ## Tasks
 
 ### 0. Docs first
-- [ ] `PRD.md`: new section (§8.10 Takeout cleanup), plus edits to §3, §9, §14 and §16 as listed under PRD impact
-- [ ] `docs/tasks.md`: link to this file under upcoming work
+- [x] `PRD.md`: new section (§8.10 Takeout cleanup), plus edits to §3, §9, §14 and §16 as listed under PRD impact
+- [x] `docs/tasks.md`: link to this file under upcoming work
 
 ### 1. Pure planning (`cleanup.py`, no Qt, no SQL)
-- [ ] Kept-copy choice (existing output files win), target folder from the date (sidecar, EXIF, filename, never mtime; otherwise `Unknown date`), name from title with extension rules, the `-edited` rule, and companion files following their photo
-- [ ] Sanitizing for Windows names, casefold clash resolution against planned and existing names, long-path shortening
-- [ ] Free-space estimate. Unit tests for all of the above, including odd titles (empty, only dots, reserved names, emoji, 300 characters)
+- [x] Kept-copy choice (existing output files win), target folder from the date (sidecar, EXIF, filename, never mtime; otherwise `Unknown date`), name from title with extension rules, the `-edited` rule, and companion files following their photo
+- [x] Sanitizing for Windows names, casefold clash resolution against planned and existing names, long-path shortening
+- [x] Free-space estimate. Unit tests for all of the above, including odd titles (empty, only dots, reserved names, emoji, 300 characters)
 
 ### 2. Schema and SQL
-- [ ] Migration 5 (sources rebuild for `cleaned`, new tables, indexes). Migration test from version 4 with data, backup written, foreign keys intact
-- [ ] Queries: runs, origins, extra files, copies, finalise transaction, `metadata.json` export rows
+- [x] Migration 5 (sources rebuild for `cleaned`, new tables, indexes). Migration test from version 4 with data, backup written, foreign keys intact
+- [x] Queries: runs, origins, extra files, copies, finalise transaction, `metadata.json` export rows
 
 ### 3. Analyse and plan
-- [ ] Analyse photos with the existing `Scanner` into the output database (temporary input source)
-- [ ] Full-inventory walk and worker hashing, sidecar match for videos, `extra_files` rows for non-images, unreadable images and JSON files that aren't sidecars
-- [ ] Planning writes `file_origins` and `cleanup_copies`. Integration test on the fake Takeout: duplicates collapse, album and Archive membership recorded, Trash skipped, **input unchanged**
+- [x] Analyse photos with the existing `Scanner` into the output database (temporary input source)
+- [x] Full-inventory walk and worker hashing, sidecar match for videos, `extra_files` rows for non-images, unreadable images and JSON files that aren't sidecars
+- [x] Planning writes `file_origins` and `cleanup_copies`. Integration test on the fake Takeout: duplicates collapse, album and Archive membership recorded, Trash skipped, **input unchanged**
 
 ### 4. Copy, verify, finalise
-- [ ] Copy with `.part`, source hash check, re-read verification, rename, mtime. One unreadable file is counted and the run continues
-- [ ] Cancel mid-copy, then resume: no duplicate rows, `done` files not copied again, leftover `.part` files cleaned up
-- [ ] Finalise transaction (stores the copies' own size and mtime), albums (album JSON title if present), `metadata.json` (validated against the format above), report
-- [ ] "Safe to delete" check against the full inventory. Test: a corrupt image and an unused sidecar end up in the output, and an uncopied file blocks the message
-- [ ] Second run into an existing output (second fake account): deduplicated against existing files, clashes renamed, `metadata.json` covers both runs
-- [ ] Every integration test asserts the **input folder is unchanged** (same files, sizes and mtimes, no new files)
+- [x] Copy with `.part`, source hash check, re-read verification, rename, mtime. One unreadable file is counted and the run continues
+- [x] Cancel mid-copy, then resume: no duplicate rows, `done` files not copied again, leftover `.part` files cleaned up
+- [x] Finalise transaction (stores the copies' own size and mtime), albums (album JSON title if present), `metadata.json` (validated against the format above), report
+- [x] "Safe to delete" check against the full inventory. Test: a corrupt image and an unused sidecar end up in the output, and an uncopied file blocks the message
+- [x] Second run into an existing output (second fake account): deduplicated against existing files, clashes renamed, `metadata.json` covers both runs
+- [x] Every integration test asserts the **input folder is unchanged** (same files, sizes and mtimes, no new files)
 
 ### 5. Main library import
-- [ ] `cleaned` source type: the scan reads metadata from the output database by path and hash, and keeps `takeout_json` dates, people, caption, favourite and location. Files stored with no date stay undated (no mtime fallback). Falls back to plain rules for unknown files
-- [ ] Add to library: source added and scanned, the run's albums created once, swap offer removes the old source only after confirmation. Test that photo ids, dates, people and albums survive the swap
-- [ ] Output folder moved or renamed: relocate the source and the metadata still resolves
-- [ ] Sources dialog and Add source: `cleaned` detected and shown, no "Change type…", `recompute_dates` reads the output database. A second cleanup run into an output that is already a source is allowed and rescans it
+- [x] `cleaned` source type: the scan reads metadata from the output database by path and hash, and keeps `takeout_json` dates, people, caption, favourite and location. Files stored with no date stay undated (no mtime fallback). Falls back to plain rules for unknown files
+- [x] Add to library: source added and scanned, the run's albums created once, swap offer removes the old source only after confirmation. Test that photo ids, dates, people and albums survive the swap
+- [x] Output folder moved or renamed: relocate the source and the metadata still resolves
+- [x] Sources dialog and Add source: `cleaned` detected and shown, no "Change type…", `recompute_dates` reads the output database. A second cleanup run into an output that is already a source is allowed and rescans it
 
 ### 6. UI
-- [ ] `CleanupThread`, the only writer of the output database, with progress and cancel signals
-- [ ] Wizard pages 1 to 6, toolbar button, File menu item, actions disabled around scans and cleanups
-- [ ] UI tests (offscreen): page flow, refusal messages, cancel prompt on close. Light and dark theme check by eye
+- [x] `CleanupThread`, the only writer of the output database, with progress and cancel signals
+- [x] Wizard pages 1 to 6, toolbar button, File menu item, actions disabled around scans and cleanups
+- [x] UI tests (offscreen): page flow, refusal messages, cancel prompt on close
+- [ ] Light and dark theme check by eye (on Windows, part of the handoff)
 
 ### 7. Tools and docs
-- [ ] Fake Takeout generator additions (see Modules) and manifest ground truth for the cleanup
-- [ ] README: what cleanup does, that originals are never touched or deleted, disk space needed, the offline promise kept prominent
-- [ ] PRD §10: time a cleanup of the 100,000-photo fake Takeout (analyse plus copy) and record it
-- [ ] Final check: `uv run pytest -q`, `uv run ruff check .`, `uv run ruff format --check .`
+- [x] Fake Takeout generator additions (see Modules) and manifest ground truth for the cleanup
+- [x] README: what cleanup does, that originals are never touched or deleted, disk space needed, the offline promise kept prominent
+- [x] PRD §10: time a cleanup of the fake Takeout (analyse plus copy) and record it. Done at 50,000 photos on WSL (author's choice); 100,000 and Windows still open
+- [x] Final check: `uv run pytest -q`, `uv run ruff check .`, `uv run ruff format --check .`
 
 ## Risks
 
