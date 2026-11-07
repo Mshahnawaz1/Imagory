@@ -226,3 +226,63 @@ def test_cancel_returns_to_output_page(window, takeout, qtbot, tmp_path):
     # Either the cancel won the race or the analysis had already finished.
     assert wiz.page in (cw.PAGE_OUTPUT, cw.PAGE_PREVIEW)
     assert_unchanged(takeout, before)
+
+
+def test_cancel_clears_a_queued_job(window, takeout, qtbot, tmp_path):
+    win = window
+    win.open_cleanup_wizard()
+    wiz = win.cleanup_wizard
+    win._queued_cleanup = ("copy", takeout, tmp_path / "out", wiz)
+    wiz.cancel_requested.emit()
+    assert win._queued_cleanup is None
+
+
+def test_result_of_a_closed_wizards_job_skips_the_new_wizard(window, takeout, qtbot, tmp_path):
+    win = window
+    before = snapshot(takeout)
+    win.open_cleanup_wizard()
+    first = win.cleanup_wizard
+    first.set_input(takeout)
+    first.set_output(tmp_path / "out")
+    first.output_next.click()
+    assert win.cleaning
+    first.close()  # the dialog answers yes: the window goes, the job is cancelled
+    qtbot.waitUntil(lambda: win.cleanup_wizard is None, timeout=WAIT)
+    win.open_cleanup_wizard()
+    second = win.cleanup_wizard
+    assert second is not first
+    qtbot.waitUntil(lambda: not win.cleaning, timeout=WAIT)
+    assert second.page == cw.PAGE_INPUT  # nothing from the first job reached it
+    assert win._cleanup_run_id is None
+    assert_unchanged(takeout, before)
+
+
+def test_albums_arrive_after_a_cancelled_scan_and_a_rescan(window, takeout, qtbot, tmp_path):
+    win = window
+    before = snapshot(takeout)
+    wiz = run_wizard(win, qtbot, takeout, tmp_path / "out")
+    wiz.add_button.click()
+    win.cancel_scan()
+    wait_scan(win, qtbot)
+    win.rescan()
+    if win.scanning:
+        wait_scan(win, qtbot)
+    assert ALBUM_TITLE in [a.name for a in db.list_albums(win.conn)]
+    assert_unchanged(takeout, before)
+
+
+def test_refused_add_hides_the_swap_button(window, takeout, qtbot, tmp_path, dialogs):
+    win = window
+    before = snapshot(takeout)
+    wiz = run_wizard(win, qtbot, takeout, tmp_path / "out")
+    wiz.swap_button.show()
+    wiz.swap_label.show()
+    win.add_source(takeout)  # a scan is running, so Add to library is refused
+    assert win.scanning
+    wiz.add_button.click()
+    assert wiz.add_button.isEnabled()
+    assert not wiz.swap_button.isVisible()
+    assert win._swap_context is None
+    assert not [s for s in win.sources if s.type == "cleaned"]
+    wait_scan(win, qtbot)
+    assert_unchanged(takeout, before)

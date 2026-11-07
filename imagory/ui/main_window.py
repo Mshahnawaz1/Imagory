@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from html import escape as html_escape
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
@@ -178,7 +179,8 @@ class MainWindow(QMainWindow):
         self._cleanup_output: Path | None = None
         self._cleanup_run_id: int | None = None
         self._pending_add: CleanedAdd | None = None
-        self._queued_cleanup: tuple | None = None  # a job asked for while the last one ends
+        # (job, input, output, wizard): a job asked for while the last one is ending
+        self._queued_cleanup: tuple | None = None
         self._swap_context: CleanedAdd | None = None
         self._anchor_id: int | None = None  # photo to keep in view across a grid reload
         self._scan_prefix = ""  # names the source being scanned when there are several
@@ -548,7 +550,7 @@ class MainWindow(QMainWindow):
     def set_sidebar_visible(self, visible: bool) -> None:
         self.sidebar.setVisible(visible and bool(self.sources))
         value = "1" if visible else "0"
-        if not self.busy and db.get_setting(self.conn, SIDEBAR_SETTING) != value:
+        if not self.scanning and db.get_setting(self.conn, SIDEBAR_SETTING) != value:
             db.set_setting(self.conn, SIDEBAR_SETTING, value)
             self.conn.commit()
 
@@ -558,7 +560,7 @@ class MainWindow(QMainWindow):
     def refresh_sidebar(self) -> None:
         people = self._people_rows()
         self.sidebar.set_people(people)
-        self.sidebar.set_people_enabled(not self.busy)
+        self.sidebar.set_people_enabled(not self.scanning)
         self.filter_bar.set_people(people)
         self.sidebar.set_albums((a.id, a.name, a.photo_count) for a in db.list_albums(self.conn))
         self.sidebar.set_sources((s.id, s.label) for s in self.sources)
@@ -592,7 +594,7 @@ class MainWindow(QMainWindow):
 
     def _sidebar_person(self, person_id: int) -> None:
         """Show one person's photos. Like an album, it combines with the other filters."""
-        if self.busy:
+        if self.scanning:
             return
         self.filter_bar.set_filter(replace(self.filter_bar.filter(), person_id=person_id))
         self._sync_sidebar_selection()
@@ -919,7 +921,7 @@ class MainWindow(QMainWindow):
         self.sources_action.setEnabled(bool(self.sources))
         self.empty.button.setEnabled(idle)
         self._update_album_actions()
-        self.sidebar.set_people_enabled(idle)
+        self.sidebar.set_people_enabled(not self.scanning)
 
     def rescan(self) -> None:
         self.rescan_sources(self.sources)
@@ -994,6 +996,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, title, text + note)
 
     def _on_scan_thread_finished(self) -> None:
+        scanned = list(self.scan_thread.sources) if self.scan_thread is not None else []
         if self.scan_thread is not None:
             self.scan_thread.deleteLater()
         self.scan_thread = None
@@ -1005,8 +1008,10 @@ class MainWindow(QMainWindow):
         self._show_photo_count()
         self.refresh_sidebar()
         pending, self._pending_add = self._pending_add, None
-        if pending is not None and not self._closing:
-            self._after_cleaned_scan(pending)
+        if not self._closing:
+            if pending is not None:
+                self._after_cleaned_scan(pending)
+            self._import_pending_albums(scanned)
 
     # --- Takeout cleanup ----------------------------------------------------------------
 
@@ -1034,62 +1039,92 @@ class MainWindow(QMainWindow):
         wizard.cancel_requested.connect(self._cancel_cleanup)
         wizard.add_to_library_requested.connect(self._add_cleanup_to_library)
         wizard.swap_requested.connect(self._swap_requested)
-        wizard.open_folder_requested.connect(show_in_explorer)
+        wizard.open_folder_requested.connect(self._open_folder)
         wizard.open_report_requested.connect(show_in_explorer)
         self.cleanup_wizard = wizard
         wizard.show()
 
+    @staticmethod
+    def _open_folder(path: Path) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
     def _on_wizard_destroyed(self, *_args) -> None:
         self.cleanup_wizard = None
 
-    def _start_cleanup_thread(self, job, input_root: Path, output_root: Path) -> None:
-        wizard = self.cleanup_wizard
+    def _start_cleanup_thread(
+        self, job, input_root: Path, output_root: Path, wizard: CleanupWizard | None
+    ) -> None:
         if self.cleaning:  # the previous job is just ending (its result is out, the thread isn't)
-            self._queued_cleanup = (job, input_root, output_root)
+            self._queued_cleanup = (job, input_root, output_root, wizard)
             return
         if self.scanning:
-            if wizard is not None:
+            if wizard is not None and shiboken6.isValid(wizard):
                 wizard.show_error("Wait for the scan to finish, then try again.")
             return
-        self._cleanup_input, self._cleanup_output = input_root, output_root
-        # Both are read here, on the main thread, and handed to the worker thread.
+        if wizard is None or not shiboken6.isValid(wizard):
+            return  # its wizard was closed; nobody is waiting for this job
+        # The sources were read on the main thread; so is input_is_source.
         thread = CleanupThread(
             job,
             input_root,
             output_root,
             self.library_root,
-            db.list_sources(self.conn),
+            list(self.sources),
             cleanup_run.input_is_source(self.conn, input_root),
             self.cleanup_options,
             self,
         )
-        if wizard is not None:
-            thread.progressed.connect(wizard.set_progress)
-            thread.preview_ready.connect(wizard.show_preview)
-            thread.cancelled.connect(wizard.show_cancelled)
-            thread.failed.connect(wizard.show_error)
-        thread.finished_ok.connect(self._on_cleanup_done)
+        # Results go only to the wizard that started this job, and only while it exists.
+        thread.progressed.connect(lambda *a: self._to_wizard(wizard, "set_progress", *a))
+        thread.preview_ready.connect(lambda c: self._to_wizard(wizard, "show_preview", c))
+        thread.cancelled.connect(lambda: self._to_wizard(wizard, "show_cancelled"))
+        thread.failed.connect(lambda m: self._to_wizard(wizard, "show_error", m))
+        thread.finished_ok.connect(
+            lambda result, run_id: self._on_cleanup_done(
+                wizard, input_root, output_root, result, run_id
+            )
+        )
         thread.finished.connect(self._on_cleanup_thread_finished)
         self.cleanup_thread = thread
         self._update_actions()
         self.scan_state_changed.emit()
         thread.start()
 
+    @staticmethod
+    def _to_wizard(wizard: CleanupWizard, slot: str, *args) -> None:
+        if shiboken6.isValid(wizard):
+            getattr(wizard, slot)(*args)
+
     def _start_analysis(self, input_root: Path, output_root: Path) -> None:
-        self._start_cleanup_thread("analysis", input_root, output_root)
+        self._cleanup_input, self._cleanup_output = input_root, output_root
+        self._cleanup_run_id = None
+        self._swap_context = None
+        self._start_cleanup_thread("analysis", input_root, output_root, self.cleanup_wizard)
 
     def _start_copy(self) -> None:
         if self._cleanup_input is not None and self._cleanup_output is not None:
-            self._start_cleanup_thread("copy", self._cleanup_input, self._cleanup_output)
+            self._start_cleanup_thread(
+                "copy", self._cleanup_input, self._cleanup_output, self.cleanup_wizard
+            )
 
     def _cancel_cleanup(self) -> None:
+        self._queued_cleanup = None
         if self.cleanup_thread is not None:
             self.cleanup_thread.cancel()
 
-    def _on_cleanup_done(self, result: DoneResult, run_id: int) -> None:
+    def _on_cleanup_done(
+        self,
+        wizard: CleanupWizard,
+        input_root: Path,
+        output_root: Path,
+        result: DoneResult,
+        run_id: int,
+    ) -> None:
+        if not shiboken6.isValid(wizard) or wizard is not self.cleanup_wizard:
+            return  # that wizard is gone; Add to library has nothing to offer
+        self._cleanup_input, self._cleanup_output = input_root, output_root
         self._cleanup_run_id = run_id
-        if self.cleanup_wizard is not None:
-            self.cleanup_wizard.show_done(result)
+        wizard.show_done(result)
 
     def _on_cleanup_thread_finished(self) -> None:
         if self.cleanup_thread is not None:
@@ -1097,12 +1132,11 @@ class MainWindow(QMainWindow):
         self.cleanup_thread = None
         queued, self._queued_cleanup = self._queued_cleanup, None
         if queued is not None and not self._closing:
-            self._start_cleanup_thread(*queued)
+            job, input_root, output_root, wizard = queued
+            if wizard is not None and shiboken6.isValid(wizard):
+                self._start_cleanup_thread(job, input_root, output_root, wizard)
         self._update_actions()
         self.scan_state_changed.emit()
-        self._update_empty_text()
-        self._show_photo_count()
-        self.refresh_sidebar()
 
     def _add_cleanup_to_library(self) -> None:
         """Add to library: the output becomes a ``cleaned`` source and is scanned; then its
@@ -1112,14 +1146,22 @@ class MainWindow(QMainWindow):
             return
         if self.busy:
             self._refuse_add("Wait for the current scan or cleanup to finish, then try again.")
+            return
+        existing = sources.source_for_folder(self.conn, output)
+        if (existing is None or existing.type != "cleaned") and not self._check_folder(output):
+            self._refuse_add(None)  # the usual overlap warning was shown or declined
         elif self.add_cleaned_output(output, run_id, self._cleanup_input) is None:
             self._refuse_add(None)
 
     def _refuse_add(self, message: str | None) -> None:
         if message:
             QMessageBox.information(self, "Add to library", message)
-        if self.cleanup_wizard is not None:
-            self.cleanup_wizard.add_button.setEnabled(True)
+        self._swap_context = None
+        wizard = self.cleanup_wizard
+        if wizard is not None:
+            wizard.add_button.setEnabled(True)
+            wizard.swap_button.hide()
+            wizard.swap_label.hide()
 
     def add_cleaned_output(
         self,
@@ -1160,10 +1202,34 @@ class MainWindow(QMainWindow):
         if add.run_id is not None and add.input is not None:
             self._offer_swap(add, quiet=True)
 
+    def _import_pending_albums(self, scanned: list[db.Source]) -> None:
+        """After a scan: import albums of every finished run of each cleaned source that was
+        scanned to completion. Idempotent, so albums a cancelled scan missed arrive with the
+        next completed one. One bad output database never blocks the others."""
+        imported = False
+        for source in scanned:
+            current = self.sources_by_id.get(source.id)
+            if current is None or current.type != "cleaned":
+                continue
+            last = db.last_scan(self.conn, current.id)
+            if last is None or last.status != "completed":
+                continue
+            try:
+                done = sources.import_run_albums(
+                    self.conn, paths.cleanup_db_path(Path(current.root_path)), None, current.id
+                )
+            except Exception as exc:  # a bad or missing output database
+                log.warning("Album import for %s failed: %s", current.root_path, exc)
+                continue
+            imported = imported or bool(done)
+        if imported:
+            self.refresh_sidebar()
+            self._fill_albums_menu()
+
     def _swap_requested(self) -> None:
         if self.busy:
             QMessageBox.information(
-                self, "Replace old source", "Wait for the scan to finish first."
+                self, "Replace old source", "Wait for the current scan or cleanup to finish first."
             )
         elif self._swap_context is not None:
             self._offer_swap(self._swap_context, quiet=False)
@@ -1216,11 +1282,14 @@ class MainWindow(QMainWindow):
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Replace old source", str(exc))
+            swapped = False
+        else:
+            swapped = True
         self._sources_updated()
         self.reload_grid()
         self.refresh_sidebar()
         self._fill_albums_menu()
-        if self.cleanup_wizard is not None:
+        if swapped and self.cleanup_wizard is not None:
             self.cleanup_wizard.swap_button.hide()
             self.cleanup_wizard.swap_label.hide()
 
@@ -1249,6 +1318,7 @@ class MainWindow(QMainWindow):
         self._closing = True
         self._queued_cleanup = None
         if self.cleanup_thread is not None:
+            self.status_label.setText("Stopping cleanup…")
             self.cleanup_thread.cancel()
             self.cleanup_thread.wait()
         if self.scan_thread is not None:
