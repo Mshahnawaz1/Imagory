@@ -216,7 +216,7 @@ class SourcesDialog(QDialog):
 
     def _update_buttons(self) -> None:
         has = self.selected_source() is not None
-        idle = not self.window_.scanning
+        idle = not self.window_.busy
         self.add_button.setEnabled(idle)
         # The scan thread is the only database writer while a scan runs.
         for button in (
@@ -259,7 +259,7 @@ class SourcesDialog(QDialog):
     def _remove_missing(self) -> None:
         """Ask first: forgetting missing items is never automatic (PRD §8.2)."""
         source = self.selected_source()
-        if source is None or self.window_.scanning:
+        if source is None or self.window_.busy:
             return
         count = self._selected_missing()
         answer = QMessageBox.question(
