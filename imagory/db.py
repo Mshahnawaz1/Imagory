@@ -2039,6 +2039,23 @@ def finalise_run(
 
     with transaction(conn):
         photo_ids = set(_photo_ids_of(conn, "source_id = ?", (temp_source_id,)))
+        # Kept rows already in the output (earlier runs) take the best date of this run's
+        # duplicates too (lead decision, wave 2); the files stay where they are on disk.
+        # Done before this run's rows move, so each row is handled once.
+        for file_id, extra_id in conn.execute(
+            "SELECT DISTINCT o.file_id, o.extra_file_id FROM file_origins o "
+            "LEFT JOIN files f ON f.id = o.file_id "
+            "LEFT JOIN extra_files e ON e.id = o.extra_file_id "
+            "WHERE o.run_id = ? AND (f.source_id = ? OR e.source_id = ?)",
+            (run_id, cleaned_source_id, cleaned_source_id),
+        ).fetchall():
+            if file_id is not None:
+                photo_id = _keep_best_file_date(conn, file_id)
+                if photo_id is not None:
+                    photo_ids.add(photo_id)
+            else:
+                _merge_extra_duplicates(conn, extra_id, temp_source_id)
+
         files_moved = extras_moved = 0
         for c in done:
             size, mtime_ns = copied[c.id]
@@ -2059,22 +2076,6 @@ def finalise_run(
                     "modified_time = ? WHERE id = ?",
                     (cleaned_source_id, c.target_relative_path, size, mtime_ns, c.extra_file_id),
                 ).rowcount
-
-        # Kept rows already in the output (earlier runs) take the best date of this run's
-        # duplicates too (lead decision, wave 2). The files stay where they are on disk.
-        for file_id, extra_id in conn.execute(
-            "SELECT DISTINCT o.file_id, o.extra_file_id FROM file_origins o "
-            "LEFT JOIN files f ON f.id = o.file_id "
-            "LEFT JOIN extra_files e ON e.id = o.extra_file_id "
-            "WHERE o.run_id = ? AND (f.source_id = ? OR e.source_id = ?)",
-            (run_id, cleaned_source_id, cleaned_source_id),
-        ).fetchall():
-            if file_id is not None:
-                photo_id = _keep_best_file_date(conn, file_id)
-                if photo_id is not None:
-                    photo_ids.add(photo_id)
-            else:
-                _merge_extra_duplicates(conn, extra_id, temp_source_id)
 
         # PRD §8.4: a cleaned source never dates a file by its modified time.
         photo_ids.update(
@@ -2333,17 +2334,6 @@ def export_files(conn: sqlite3.Connection, cleaned_source_id: int) -> list[Expor
 # Pipeline helpers (imagory/cleanup_run.py, wave 2).
 
 
-def connect_readonly(path: Path | str) -> sqlite3.Connection:
-    """Open an existing database read only (no migration, no journal change), e.g. to look
-    at a cleanup output before the user starts. Raises ``sqlite3.OperationalError`` when the
-    file is missing or not a database."""
-    uri = Path(path).resolve().as_uri() + "?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only=ON")
-    return conn
-
-
 @dataclass(frozen=True)
 class CleanupFileRow:
     """What the pipeline needs to know about one ``files`` row."""
@@ -2453,23 +2443,30 @@ def run_duplicates(
     conn: sqlite3.Connection, run_id: int, temp_source_id: int
 ) -> list[tuple[str, int]]:
     """``(input path, size)`` of a run's origins that are not copied themselves (the
-    duplicates skipped), while the temporary source still exists. By path."""
-    return [
-        (r[0], r[1] or 0)
+    duplicates skipped), while the temporary source still exists. By path.
+
+    Built in Python from three linear scans (origins, copy sources, the temporary source's
+    sizes), with exact path comparison: two input files may differ only in case.
+    """
+    copied = {
+        r[0]
         for r in conn.execute(
-            # Exact (BINARY) path comparisons: two input files may differ only in case.
-            "SELECT o.original_relative_path, COALESCE(f.size, e.size) FROM file_origins o "
-            "LEFT JOIN files f ON f.source_id = ? "
-            "AND f.relative_path = o.original_relative_path COLLATE BINARY "
-            "LEFT JOIN extra_files e ON e.source_id = ? "
-            "AND e.relative_path = o.original_relative_path COLLATE BINARY "
-            "WHERE o.run_id = ? AND NOT EXISTS (SELECT 1 FROM cleanup_copies c "
-            "WHERE c.run_id = o.run_id "
-            "AND c.source_relative_path = o.original_relative_path COLLATE BINARY) "
-            "ORDER BY o.original_relative_path, o.id",
-            (temp_source_id, temp_source_id, run_id),
+            "SELECT source_relative_path FROM cleanup_copies WHERE run_id = ?", (run_id,)
         )
-    ]
+    }
+    sizes: dict[str, int] = {}
+    for table in ("extra_files", "files"):  # a file row wins over an extra row
+        sizes.update(
+            conn.execute(
+                f"SELECT relative_path, size FROM {table} WHERE source_id = ?", (temp_source_id,)
+            ).fetchall()
+        )
+    rows = conn.execute(
+        "SELECT original_relative_path FROM file_origins WHERE run_id = ? "
+        "ORDER BY original_relative_path, id",
+        (run_id,),
+    )
+    return [(r[0], sizes.get(r[0]) or 0) for r in rows if r[0] not in copied]
 
 
 # --- cleaned sources --------------------------------------------------------------------
