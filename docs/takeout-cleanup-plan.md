@@ -9,7 +9,7 @@ one copy per photo, copying everything else as-is, the Year/Month layout, adding
 `cleaned` source that reads its own database, albums and Archive as albums, keeping both edited and
 original copies, one input per run with later runs merged in, skipping Trash, the swap offer, the
 title-based filenames, and `metadata.json`. Everything else is a proposed default, open to change.
-This file tracks only this feature. The project-wide list is `agents_docs/tasks.md`. Tick a box only
+This file tracks only this feature. The project-wide list is `docs/tasks.md`. Tick a box only
 when the item is implemented, tested, and committed.
 
 ## PRD impact (update `PRD.md` first, task 0)
@@ -190,7 +190,7 @@ All text shown from sidecars is escaped, as in the info panel.
 
 ### 0. Docs first
 - [ ] `PRD.md`: new section (§8.10 Takeout cleanup), plus edits to §3, §9, §14 and §16 as listed under PRD impact
-- [ ] `agents_docs/tasks.md`: link to this file under upcoming work
+- [ ] `docs/tasks.md`: link to this file under upcoming work
 
 ### 1. Pure planning (`cleanup.py`, no Qt, no SQL)
 - [ ] Kept-copy choice (existing output files win), target folder from the date (sidecar, EXIF, filename, never mtime; otherwise `Unknown date`), name from title with extension rules, the `-edited` rule, and companion files following their photo

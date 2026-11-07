@@ -4,7 +4,7 @@ Imagory is an offline Windows desktop app (Python 3.12, PySide6, SQLite) for bro
 
 ## Current focus: V1
 - V0 (PRD §7) is implemented; its Windows `.exe` checks in §7.5 are still pending.
-- V1 is PRD §8, broken into tasks in `tasks.md`. Work section by section and tick a box only once the item is implemented, tested, and committed.
+- V1 is PRD §8, broken into tasks in `docs/tasks.md`. Work section by section and tick a box only once the item is implemented, tested, and committed.
 - Still out of scope (PRD §3, §14): faces, Takeout zips (V1.5), portable mode, a settings screen.
 
 ## Non-negotiable principles (PRD §3)
