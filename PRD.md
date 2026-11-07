@@ -216,7 +216,7 @@ Each file gets one best date and a `date_source` recording where it came from (`
 - `taken_at_utc` is stored when known (from the JSON, or EXIF with `OffsetTimeOriginal`).
 - For Takeout files with both values: if the EXIF time and the JSON time differ by less than 24 hours, the difference is assumed to be a time zone offset, and the EXIF wall-clock time is used as `taken_at_local` with the JSON UTC time kept. Otherwise the JSON time wins, converted with the computer's time zone.
 
-**Filename patterns** recognized in V1: `IMG_20190131_235959`, `PXL_20190131_235959123`, `IMG-20190131-WA0001` (WhatsApp, date only), `Screenshot_20190131-235959`, and `2019-01-31 23.59.59`. Dates before 1990 or in the future are rejected.
+**Filename patterns** recognized in V1: `IMG_20190131_235959`, `VID_20190131_235959` (Android video), `PXL_20190131_235959123`, `IMG-20190131-WA0001` (WhatsApp, date only), `Screenshot_20190131-235959`, and `2019-01-31 23.59.59`. Dates before 1990 or in the future are rejected.
 
 **Photo date across copies:** a photo takes the best-ranked date among all its files. For example, a photo found in both a plain folder and a Takeout export uses the Takeout JSON date.
 
@@ -481,7 +481,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Grid in the app | `PhotoGrid` with a database data source whose row and count queries are injected (plain, filtered, or album); total height known from month counts before all rows load; unloaded cells paint as placeholders. Month counts use index seeks (about 25 ms at 100,000), so the unfiltered grid uses them instead of the filtered query |
 | Scan rows in the grid | Inserted at their sorted positions keeping the selection, current photo and top visible photo; only photos that became visible in the batch are reported, so a new copy never shows twice |
 | Date logic (V1) | Pure functions in `imagory/dates.py`; "now" and the computer's time zone are injectable for tests |
-| Filename dates | Patterns match at the start of the name, case-insensitively; WhatsApp date-only names give midnight local time; invalid, pre-1990 and future filename dates fall through to the modified time |
+| Filename dates | Patterns match at the start of the name, case-insensitively; WhatsApp date-only names give midnight local time; invalid, pre-1990 and future filename dates fall through to the modified time. `VID_YYYYMMDD_HHMMSS` added 2026-11-07 so Android videos in a Takeout cleanup get a filename date |
 | Takeout JSON vs EXIF | Less than 24 h apart: EXIF wall-clock as local time plus JSON UTC, `date_source = takeout_json` (pending confirmation, section 18). 24 h or more: JSON wins, converted with the computer's zone. With JSON present, its UTC overrides EXIF `OffsetTimeOriginal` |
 | Photo date across copies | Best source rank (takeout_json, exif, filename, mtime); ties go to a known UTC time, then the earliest local time, then the earliest UTC time, so input order never matters |
 | Grid view (V1) | Custom `QAbstractScrollArea` with a Qt-free layout computed from per-month counts (bisect lookups); data source and thumbnail provider are interfaces, so the widget never touches the database; selection stored as a bytearray; vertical scrollbar always shown to avoid reflow loops |
