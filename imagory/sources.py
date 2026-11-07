@@ -10,10 +10,10 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
-from imagory import dates, db, paths, takeout, thumbs
-from imagory.thumbs import fold_path
+from imagory import dates, db, paths, scanner, takeout, thumbs
 
 log = logging.getLogger(__name__)
 
@@ -276,7 +276,8 @@ def add_cleaned_source(
 
 def takeout_album_name(name: str, taken: set[str]) -> str:
     """The name for an imported album: ``name`` if no album has it (ignoring case), else
-    ``<name> (Takeout)``, then ``<name> (Takeout 2)`` and so on. ``taken`` is casefolded."""
+    ``<name> (Takeout)``, then ``<name> (Takeout 2)`` and so on. ``taken`` is casefolded,
+    and ``name`` already normalised (:func:`db.imported_album_name`)."""
     if name.casefold() not in taken:
         return name
     candidate = f"{name} ({CLEANED_ALBUM_SUFFIX})"
@@ -291,8 +292,15 @@ def takeout_album_name(name: str, taken: set[str]) -> str:
 class ImportedAlbum:
     album_id: int
     name: str  # as created in the main library
-    output_name: str  # the album's name in the output database
+    output_name: str  # the album's (normalised) name in the output database
     photos: int
+
+
+def _require_completed_scan(conn: sqlite3.Connection, source: db.Source) -> db.LastScan:
+    last = db.last_scan(conn, source.id)
+    if last is None or last.status != "completed":
+        raise ValueError(f"The last scan of “{source.label}” did not complete; scan it first")
+    return last
 
 
 def import_run_albums(
@@ -302,22 +310,26 @@ def import_run_albums(
     source_id: int,
 ) -> list[ImportedAlbum]:
     """Create the albums of a cleanup run (or, with ``run_id`` None, of every finished run)
-    in the main library, once per run. Call it after the cleaned source ``source_id`` has
-    been scanned, since members are found through its file rows.
+    in the main library, once per run. The cleaned source ``source_id`` must have been
+    scanned to completion first, since members are found through its file rows.
 
     Runs already imported for this source are skipped, so calling it again does nothing.
-    Albums of the runs imported together are merged by name (ignoring case). A name already
-    used in the main library gets ``(Takeout)``, ``(Takeout 2)``, …; existing albums are
-    never changed. Members are photos only (videos and other files are not in the grid), and
-    an album with no photo in the library is not created. The output database is opened
-    read only. Raises ``ValueError`` if the source is not a scanned cleaned source, and
-    ``db.OutputDatabaseError`` if the output database can't be read.
+    Album names are normalised as album names always are (trimmed; empty becomes
+    ``Untitled``), and albums of the runs imported together are merged by that name
+    (ignoring case). A name already used in the main library gets ``(Takeout)``,
+    ``(Takeout 2)``, …; existing albums are never changed. Members are photos only (videos
+    and other files are not in the grid), and an album with no photo in the library is not
+    created. One album that fails is logged and skipped; the others are still created and
+    the runs recorded as imported. The output database is opened read only.
+
+    Raises ``ValueError`` if the source is not a cleaned source whose latest scan
+    completed (nothing is recorded then), and ``db.OutputDatabaseError`` if the output
+    database can't be read.
     """
     source = db.get_source(main_conn, source_id)
     if source is None or source.type != "cleaned":
         raise ValueError(f"Source {source_id} is not a cleaned source")
-    if source.last_scan_at is None:
-        raise ValueError(f"Scan the cleaned source “{source.label}” before importing albums")
+    _require_completed_scan(main_conn, source)
     key = _ALBUMS_IMPORTED_KEY.format(id=source.id, added_at=source.added_at)
     done_runs: set[int] = set(json.loads(db.get_setting(main_conn, key) or "[]"))
 
@@ -330,7 +342,8 @@ def import_run_albums(
             for rid in wanted:
                 for cid in cleaned_ids:
                     for album in db.export_albums(out, cid, rid):
-                        entry = by_name.setdefault(album.name.casefold(), (album.name, []))
+                        name = db.imported_album_name(album.name)
+                        entry = by_name.setdefault(name.casefold(), (name, []))
                         entry[1].extend(album.files)
         except sqlite3.Error as exc:
             raise db.OutputDatabaseError(f"Cannot read {output_db}: {exc}") from exc
@@ -340,31 +353,67 @@ def import_run_albums(
     taken = {a.name.casefold() for a in db.list_albums(main_conn)}
     planned: list[tuple[str, str, list[int]]] = []  # (new name, output name, photo ids)
     for output_name, files in sorted(by_name.values(), key=lambda a: (a[0].casefold(), a[0])):
-        photo_ids = db.photo_ids_at_paths(main_conn, source_id, files)
-        if not photo_ids:
-            log.info("Album %r has no photos in the library; not created", output_name)
+        try:
+            photo_ids = db.photo_ids_at_paths(main_conn, source_id, files)
+            if not photo_ids:
+                log.info("Album %r has no photos in the library; not created", output_name)
+                continue
+            name = takeout_album_name(output_name, taken)
+        except Exception:  # one bad album must not stop the others
+            log.exception("Album %r skipped", output_name)
             continue
-        name = takeout_album_name(output_name, taken)
         taken.add(name.casefold())
         planned.append((name, output_name, photo_ids))
     marker = (key, json.dumps(sorted(done_runs | set(wanted))))
     ids = db.create_albums_with_photos(main_conn, [(n, p) for n, _, p in planned], marker)
-    log.info("Imported %d albums from runs %s of %s", len(ids), wanted, output_db)
-    return [
+    imported = [
         ImportedAlbum(album_id, name, output_name, len(photo_ids))
         for album_id, (name, output_name, photo_ids) in zip(ids, planned, strict=True)
+        if album_id is not None
     ]
+    log.info("Imported %d albums from runs %s of %s", len(imported), wanted, output_db)
+    return imported
 
 
-def swap_ready(conn: sqlite3.Connection, cleaned_source_id: int) -> bool:
-    """Whether the old Takeout source may be swapped out: the cleaned source exists and its
-    latest scan completed (not cancelled, failed or still running)."""
+def _parse_utc(value: str | None) -> datetime | None:
+    """A ``…Z`` UTC timestamp (any fraction of a second) as an aware datetime, or None."""
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+
+
+def swap_ready(
+    conn: sqlite3.Connection, cleaned_source_id: int, output_db: Path, run_id: int
+) -> bool:
+    """Whether the old Takeout source may be swapped out for the cleaned source.
+
+    True only when the cleaned source's latest scan completed and **started after** cleanup
+    run ``run_id`` finished, so the scan saw everything that run copied. The timestamps
+    compared are the main library's ``scan_runs.started_at`` and the output database's
+    ``cleanup_runs.finished_at`` (both UTC ``…Z`` from the same computer's clock), parsed
+    as datetimes rather than compared as text. A run that is missing or not ``done``, or
+    an output database that can't be read, gives False.
+    """
     source = db.get_source(conn, cleaned_source_id)
-    return (
-        source is not None
-        and source.type == "cleaned"
-        and db.last_scan_status(conn, cleaned_source_id) == "completed"
-    )
+    if source is None or source.type != "cleaned":
+        return False
+    last = db.last_scan(conn, cleaned_source_id)
+    if last is None or last.status != "completed":
+        return False
+    try:
+        runs = db.read_output_database(output_db, files=False).runs
+    except db.OutputDatabaseError as exc:
+        log.warning("Swap check: %s", exc)
+        return False
+    run = next((r for r in runs if r.id == run_id), None)
+    if run is None or run.status != "done":
+        return False
+    scanned, finished = _parse_utc(last.started_at), _parse_utc(run.finished_at)
+    return scanned is not None and finished is not None and scanned > finished
 
 
 def swap_orphan_count(conn: sqlite3.Connection, old_source_id: int) -> int:
@@ -374,53 +423,52 @@ def swap_orphan_count(conn: sqlite3.Connection, old_source_id: int) -> int:
 
 
 def swap_source(
-    conn: sqlite3.Connection, thumbs_root: Path, old_source_id: int, cleaned_source_id: int
+    conn: sqlite3.Connection,
+    thumbs_root: Path,
+    old_source_id: int,
+    cleaned_source_id: int,
+    output_db: Path,
+    run_id: int,
 ) -> None:
-    """Remove the old Takeout source after its cleanup output was added and scanned (the
-    swap offer). Only called after the user confirms. Uses :func:`remove_source`, so only
-    database rows go; files on disk are never touched. Photos also in the cleaned source
-    keep their ids, albums, people and metadata, because a photo is its content hash.
+    """Remove the old Takeout source after its cleanup output (run ``run_id`` in
+    ``output_db``) was added and scanned: the swap offer. Only called after the user
+    confirms. Uses :func:`remove_source`, so only database rows go; files on disk are never
+    touched. Photos also in the cleaned source keep their ids, albums, people and metadata,
+    because a photo is its content hash.
 
-    Raises ``ValueError`` when the cleaned source isn't ready (:func:`swap_ready`), or the
-    old source is missing, the cleaned source itself, or another cleaned source.
+    Raises ``ValueError`` when :func:`swap_ready` is False, or the old source is missing,
+    the cleaned source itself, or another cleaned source.
     """
     if old_source_id == cleaned_source_id:
         raise ValueError("The old source and the cleaned source are the same")
     old = db.get_source(conn, old_source_id)
     if old is None or old.type == "cleaned":
         raise ValueError(f"Source {old_source_id} can't be swapped out")
-    if not swap_ready(conn, cleaned_source_id):
-        raise ValueError("The cleaned source has not finished scanning yet")
+    if not swap_ready(conn, cleaned_source_id, output_db, run_id):
+        raise ValueError("The cleaned source has not been scanned since the cleanup finished")
     remove_source(conn, thumbs_root, old_source_id)
     log.info("Swapped source %d for cleaned source %d", old_source_id, cleaned_source_id)
 
 
 def _compute_cleaned_dates(conn: sqlite3.Connection, source: db.Source) -> list[db.RecomputedDate]:
-    """Recomputed dates of a cleaned source: a file in its output database (same path,
-    same hash) takes the stored date and location, which may be no date at all; any other
-    file follows the plain-folder rules. Reads only. Raises ``FileNotFoundError`` when the
-    folder or its database is unavailable, since guessing would downgrade stored dates."""
+    """Recomputed dates of a cleaned source, matched as a scan matches them
+    (:meth:`scanner.OutputMetadata.confirmed`): a confirmed file takes the stored date and
+    location, which may be no date at all; any other file follows the plain-folder rules.
+    Reads only.
+
+    Unlike a scan, a missing folder or output database raises ``FileNotFoundError``: a
+    recompute rewrites every file's date, so falling back to the plain rules would turn
+    every stored Takeout date (and every undated file) into a file-time date at once.
+    """
     root = Path(source.root_path)
-    db_file = paths.cleanup_db_path(root)
-    if not root.is_dir() or not db_file.is_file():
-        raise FileNotFoundError(f"Cleanup output database not found: {db_file}")
-    meta = {fold_path(m.relative_path): m for m in db.read_output_metadata(db_file)}
+    if not root.is_dir() or not paths.cleanup_db_path(root).is_file():
+        raise FileNotFoundError(f"Cleanup output database not found in {root}")
+    output = scanner.load_output_metadata(root)
     updates: list[db.RecomputedDate] = []
-    for row in db.cleaned_date_inputs(conn, source.id):
-        m = meta.get(fold_path(row.relative_path))
-        if m is not None and m.content_hash == row.content_hash:
-            # The stored date may be None: an undated cleaned file stays undated.
-            updates.append(
-                db.RecomputedDate(
-                    row.id,
-                    m.taken_at_local,
-                    m.taken_at_utc,
-                    m.date_source,
-                    None,
-                    m.latitude,
-                    m.longitude,
-                )
-            )
+    for row in db.date_inputs(conn, source.id):
+        meta = output.confirmed(row.relative_path, row.content_hash)
+        if meta is not None:
+            updates.append(scanner.cleaned_date(row.id, meta))
             continue
         result = dates.resolve_date(
             "plain",
