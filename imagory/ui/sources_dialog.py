@@ -31,7 +31,11 @@ if TYPE_CHECKING:
     from imagory.ui.main_window import MainWindow
 
 _NUMBER_ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-TYPE_NAMES = {"plain": "Plain folder", "takeout": "Google Takeout export"}
+TYPE_NAMES = {
+    "plain": "Plain folder",
+    "takeout": "Google Takeout export",
+    "cleaned": "Cleaned Takeout (made by Imagory)",
+}
 
 
 def default_label(folder: Path) -> str:
@@ -65,7 +69,13 @@ class AddSourceDialog(QDialog):
         self.setWindowTitle("Add source")
         self.detection = detection
         self.label_edit = QLineEdit(default_label(folder), self)
-        self.type_combo = TypeCombo(detection.type, self)
+        # A cleanup output is always ``cleaned``; the user can't pick another type for it.
+        self.fixed_type = detection.type if detection.type not in db.SOURCE_TYPES else None
+        self.type_combo = TypeCombo(detection.type if self.fixed_type is None else "plain", self)
+        type_field: QWidget = self.type_combo
+        if self.fixed_type is not None:
+            self.type_combo.hide()
+            type_field = QLabel(TYPE_NAMES[self.fixed_type], self)
         detected = QLabel(f"Detected: {TYPE_NAMES[detection.type]}. {detection.reason}", self)
         detected.setWordWrap(True)
         folder_label = QLabel(str(folder), self)
@@ -74,7 +84,7 @@ class AddSourceDialog(QDialog):
         form = QFormLayout()
         form.addRow("Folder:", folder_label)
         form.addRow("Label:", self.label_edit)
-        form.addRow("Type:", self.type_combo)
+        form.addRow("Type:", type_field)
         form.addRow("", detected)
         note = QLabel("Imagory only reads this folder. Your photos are never changed.", self)
         note.setWordWrap(True)
@@ -105,7 +115,7 @@ class AddSourceDialog(QDialog):
 
     @property
     def source_type(self) -> str:
-        return self.type_combo.value
+        return self.fixed_type or self.type_combo.value
 
 
 class SourcesDialog(QDialog):
@@ -218,6 +228,9 @@ class SourcesDialog(QDialog):
         ):
             button.setEnabled(has and idle)
         self.remove_missing_button.setEnabled(has and idle and self._selected_missing() > 0)
+        # A cleaned source's type is fixed (PRD §8.10), so "Change type…" isn't offered.
+        source = self.selected_source()
+        self.type_button.setVisible(source is None or source.type in db.SOURCE_TYPES)
 
     def _selected_missing(self) -> int:
         source = self.selected_source()

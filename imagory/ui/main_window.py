@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from imagory import __version__, db, paths, sources, takeout
+from imagory import __version__, db, paths, sources
 from imagory.scanner import Progress, ScanSummary
 from imagory.ui.albums import AddToAlbumDialog, AlbumsDialog
 from imagory.ui.filter_bar import FilterBar
@@ -703,7 +703,7 @@ class MainWindow(QMainWindow):
         folder = self._pick_folder("Add a photo folder or Takeout export")
         if folder is None or not self._check_folder(folder):
             return
-        detection = takeout.detect_source_type(folder)
+        detection = sources.detect_source_type(folder)
         dialog = AddSourceDialog(folder, detection, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.add_source(folder, dialog.label, dialog.source_type, detection.type)
@@ -718,7 +718,7 @@ class MainWindow(QMainWindow):
     ) -> db.Source:
         """Create a source for ``folder`` and scan it. The type is detected if not given."""
         if detected_type is None:
-            detected_type = takeout.detect_source_type(folder).type
+            detected_type = sources.detect_source_type(folder).type
         source = sources.add_source(
             self.conn,
             self.thumbs_root,
