@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from imagory import db
+from imagory import db, paths
 from imagory.thumbs import FileJob, FileResult, fold_path, process_batch
 
 if TYPE_CHECKING:
@@ -171,6 +171,25 @@ def diff_files(walked: list[WalkedFile], existing: list[db.FileState]) -> Diff:
     return result
 
 
+# --- cleaned sources --------------------------------------------------------------------
+
+
+def load_output_metadata(root: Path) -> dict[str, db.OutputFileMeta]:
+    """What the cleanup output database inside ``root`` knows about its files, keyed by
+    folded relative path. Read on the coordinator; the database is opened read only.
+
+    A folder without ``.imagory/imagory.db`` gives an empty map (every file then follows the
+    plain-folder rules). A database that exists but can't be read raises
+    :class:`db.OutputDatabaseError`, so the scan stops before storing guessed dates.
+    """
+    db_file = paths.cleanup_db_path(root)
+    if not db_file.is_file():
+        log.warning("Cleaned source %s has no %s; using the plain-folder rules", root, db_file)
+        return {}
+    rows = db.read_output_metadata(db_file)
+    return {fold_path(m.relative_path): m for m in rows}
+
+
 # --- coordinator ------------------------------------------------------------------------
 
 
@@ -228,6 +247,8 @@ class Scanner:
         # sidecars read for files being processed (location is applied when storing).
         self._sidecar_of: dict[str, str] = {}
         self._sidecar_data: dict[str, Sidecar] = {}
+        # Cleaned source: folded output-relative path -> what the output database knows.
+        self._output_meta: dict[str, db.OutputFileMeta] = {}
 
     def cancel(self) -> None:
         """Stop queueing new work; in-flight results are still committed."""
@@ -303,6 +324,8 @@ class Scanner:
         jobs.extend(diff.changed)
         if not jobs:
             return "cancelled" if self.cancelled else "completed"
+        if self.source.type == "cleaned":
+            self._output_meta = load_output_metadata(root)
         self._process(jobs, counts, found=counts.found, disappeared=set(diff.disappeared))
         return "cancelled" if self.cancelled else "completed"
 
@@ -397,7 +420,9 @@ class Scanner:
             in_flight: set[Future[list[FileResult]]] = set()
             root = str(self.source.root_path)
             thumbs_root = str(self.thumbs_root)
-            source_type = self.source.type
+            # A cleaned source's dates come from its output database, applied when storing;
+            # workers compute the plain-folder date as the fallback (PRD §8.10).
+            source_type = "plain" if self.source.type == "cleaned" else self.source.type
             exhausted = False
             try:
                 while True:
@@ -429,6 +454,12 @@ class Scanner:
         A new file whose hash matches a missing file of this source is a move: the old
         row is re-pointed, keeping its id and first-seen date (PRD §8.2).
         """
+        meta = self._confirmed_output_meta(res)
+        taken_at_local, taken_at_utc, date_source = (
+            (meta.taken_at_local, meta.taken_at_utc, meta.date_source)
+            if meta is not None
+            else (res.taken_at_local, res.taken_at_utc, res.date_source)
+        )
         record = db.FileRecord(
             res.relative_path,
             res.size,
@@ -436,10 +467,10 @@ class Scanner:
             res.width,
             res.height,
             res.format,
-            res.taken_at_local,
-            res.date_source,
+            taken_at_local,  # None for an undated cleaned file (no mtime fallback)
+            date_source,
             content_hash=res.content_hash,
-            taken_at_utc=res.taken_at_utc,
+            taken_at_utc=taken_at_utc,
             exif_taken_at=res.exif_taken_at,
             exif_offset=res.exif_offset,
             sidecar_relative_path=self._sidecar_of.get(res.relative_path),
@@ -465,7 +496,26 @@ class Scanner:
                 sidecar.favorite,
                 sidecar.uploaded_utc,
             )
+        if meta is not None:
+            db.set_photo_location(self.conn, stored, meta.latitude, meta.longitude)
+            db.set_photo_takeout_metadata(
+                self.conn,
+                stored,
+                meta.people,
+                meta.description,
+                meta.favorite,
+                meta.uploaded_at_utc,
+            )
         return outcome, stored
+
+    def _confirmed_output_meta(self, res: FileResult) -> db.OutputFileMeta | None:
+        """A cleaned source file's metadata from the output database, if the file is in it
+        (same path, ignoring case) with the same contents. Otherwise None: the file was
+        added or changed after the cleanup, and the plain-folder rules apply."""
+        meta = self._output_meta.get(fold_path(res.relative_path))
+        if meta is None or meta.content_hash != res.content_hash:
+            return None
+        return meta
 
     def _batches(self, files: list[WalkedFile]) -> Iterator[list[FileJob]]:
         for start in range(0, len(files), self.worker_batch):
