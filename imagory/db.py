@@ -2312,6 +2312,235 @@ def export_files(conn: sqlite3.Connection, cleaned_source_id: int) -> list[Expor
     return result
 
 
+# --- cleaned sources --------------------------------------------------------------------
+# A ``cleaned`` source in the main library is a cleanup output folder (PRD §8.10). Its own
+# database, ``<root>/.imagory/imagory.db``, lies inside a user folder, so it is only ever
+# read: never written, never migrated, and opened so that no ``-wal`` or ``-shm`` file
+# appears next to it. Everything is read in one go and the connection closed again.
+
+OUTPUT_MIN_VERSION = 5  # the first schema with the cleanup tables
+
+
+class OutputDatabaseError(RuntimeError):
+    """A cleanup output database exists but cannot be read."""
+
+
+@dataclass(frozen=True)
+class OutputFileMeta:
+    """What a cleanup output database knows about one of its files (photo or other file)."""
+
+    relative_path: str  # output-relative, as stored
+    content_hash: str | None
+    taken_at_local: str | None  # None: undated (never an mtime date, PRD §8.4)
+    taken_at_utc: str | None
+    date_source: str | None
+    latitude: float | None
+    longitude: float | None
+    description: str | None
+    favorite: bool
+    uploaded_at_utc: str | None
+    people: tuple[str, ...]
+
+
+@contextmanager
+def open_output_database(db_file: Path) -> Iterator[sqlite3.Connection]:
+    """Open a cleanup output database for reading only, without writing anything beside it.
+
+    With no ``-wal`` file it is opened ``immutable`` (read only, no locking, so SQLite
+    creates no ``-wal``/``-shm``). A non-empty ``-wal`` (an earlier writer stopped before
+    checkpointing) may hold committed rows that ``immutable`` would not see, so the database
+    and its WAL are copied to a temporary folder outside the source and the copy is read.
+    Raises :class:`OutputDatabaseError` when it can't be opened.
+    """
+    import shutil
+    import tempfile
+
+    db_file = Path(db_file).absolute()
+    wal = Path(f"{db_file}-wal")
+    try:
+        has_wal = wal.is_file() and wal.stat().st_size > 0
+    except OSError:
+        has_wal = False
+    tmp: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        if has_wal:
+            tmp = tempfile.TemporaryDirectory(prefix="imagory-output-")
+            copy = Path(tmp.name) / db_file.name
+            shutil.copyfile(db_file, copy)  # reads the originals only
+            shutil.copyfile(wal, Path(f"{copy}-wal"))
+            conn = sqlite3.connect(str(copy), isolation_level=None)
+        else:
+            uri = f"{db_file.as_uri()}?mode=ro&immutable=1"
+            conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()  # fails if not a db
+    except (OSError, sqlite3.Error) as exc:
+        if tmp is not None:
+            tmp.cleanup()
+        raise OutputDatabaseError(f"Cannot open {db_file}: {exc}") from exc
+    try:
+        yield conn
+    finally:
+        conn.close()
+        if tmp is not None:
+            tmp.cleanup()
+
+
+def read_output_metadata(db_file: Path) -> list[OutputFileMeta]:
+    """Every file of the ``cleaned`` source(s) in a cleanup output database, with its date,
+    location, people, caption, favourite and upload time. Photos take their photo's values
+    (as ``metadata.json`` does); other files their ``extra_files`` row. JSON copies under
+    ``.imagory/`` are left out. An ``mtime`` date is returned as undated.
+
+    Raises :class:`OutputDatabaseError` if the database can't be opened or read.
+    """
+    with open_output_database(db_file) as out:
+        try:
+            version = schema_version(out)
+            if version < OUTPUT_MIN_VERSION:
+                raise OutputDatabaseError(
+                    f"{db_file} is not a cleanup output (schema version {version})"
+                )
+            return _read_output_rows(out)
+        except sqlite3.Error as exc:
+            raise OutputDatabaseError(f"Cannot read {db_file}: {exc}") from exc
+
+
+def _read_output_rows(out: sqlite3.Connection) -> list[OutputFileMeta]:
+    cleaned = [r[0] for r in out.execute("SELECT id FROM sources WHERE type = 'cleaned'")]
+    if not cleaned:
+        return []
+    marks = ",".join("?" * len(cleaned))
+    people: dict[int, list[str]] = {}
+    for photo_id, name in out.execute(
+        "SELECT pp.photo_id, pe.name FROM photo_people pp JOIN people pe ON pe.id = pp.person_id "
+        "ORDER BY pe.name COLLATE NOCASE, pe.name"
+    ):
+        people.setdefault(photo_id, []).append(name)
+
+    def dated(local: str | None, utc: str | None, source: str | None) -> tuple:
+        if not local or source is None or source == "mtime":
+            return None, None, None
+        return local, utc, source
+
+    result: list[OutputFileMeta] = []
+    for r in out.execute(
+        "SELECT f.relative_path, COALESCE(f.content_hash, p.content_hash), p.id, "
+        "COALESCE(p.taken_at_local, f.taken_at_local), "
+        "CASE WHEN p.id IS NULL THEN f.taken_at_utc ELSE p.taken_at_utc END, "
+        "COALESCE(p.date_source, f.date_source), "
+        "p.latitude, p.longitude, p.description, p.favorite, p.uploaded_at_utc "
+        f"FROM files f LEFT JOIN photos p ON p.id = f.photo_id WHERE f.source_id IN ({marks}) "
+        "ORDER BY f.id",
+        cleaned,
+    ):
+        result.append(
+            OutputFileMeta(
+                r[0],
+                r[1],
+                *dated(r[3], r[4], r[5]),
+                r[6],
+                r[7],
+                r[8],
+                bool(r[9]),
+                r[10],
+                tuple(people.get(r[2], ())),
+            )
+        )
+    for r in out.execute(
+        "SELECT relative_path, content_hash, taken_at_local, taken_at_utc, date_source, "
+        "latitude, longitude, description, favorite, uploaded_at_utc, people FROM extra_files "
+        f"WHERE source_id IN ({marks}) AND relative_path NOT LIKE ? ESCAPE '\\' ORDER BY id",
+        [*cleaned, _like_escape(_JSON_COPY_PREFIX) + "%"],
+    ):
+        try:
+            names = tuple(n for n in json.loads(r[10]) if isinstance(n, str))
+        except (TypeError, ValueError):
+            names = ()
+        result.append(
+            OutputFileMeta(
+                r[0], r[1], *dated(r[2], r[3], r[4]), r[5], r[6], r[7], bool(r[8]), r[9], names
+            )
+        )
+    return result
+
+
+class CleanedDateInputs(NamedTuple):
+    """A file row of a ``cleaned`` source with what its date is computed from."""
+
+    id: int
+    relative_path: str
+    modified_time: int
+    exif_taken_at: str | None
+    exif_offset: str | None
+    content_hash: str | None
+
+
+def cleaned_date_inputs(conn: sqlite3.Connection, source_id: int) -> list[CleanedDateInputs]:
+    """Every file row of a source (missing ones too) with its date inputs and hash."""
+    return [
+        CleanedDateInputs(*r)
+        for r in conn.execute(
+            "SELECT id, relative_path, modified_time, exif_taken_at, exif_offset, content_hash "
+            "FROM files WHERE source_id = ? ORDER BY relative_path, id",
+            (source_id,),
+        )
+    ]
+
+
+def photo_ids_at_paths(conn: sqlite3.Connection, source_id: int, paths: Iterable[str]) -> list[int]:
+    """Distinct photo ids of a source's files at these relative paths (case-insensitive),
+    in the order of ``paths``. Paths with no file row are skipped."""
+    found: dict[int, None] = {}
+    for path in paths:
+        row = conn.execute(
+            "SELECT photo_id FROM files WHERE source_id = ? AND relative_path = ? "
+            "AND photo_id IS NOT NULL",
+            (source_id, path),
+        ).fetchone()
+        if row is not None:
+            found.setdefault(row[0])
+    return list(found)
+
+
+def create_albums_with_photos(
+    conn: sqlite3.Connection,
+    albums: Iterable[tuple[str, Iterable[int]]],
+    setting: tuple[str, str] | None = None,
+) -> list[int]:
+    """Create new albums with their photos, and optionally store one setting, in one
+    transaction. Names must be free already: a taken name raises :class:`AlbumNameError`
+    and nothing is created. Existing albums are never touched. Returns the new album ids."""
+    now = utc_now()
+    ids: list[int] = []
+    try:
+        with transaction(conn):
+            for name, photo_ids in albums:
+                album_id = conn.execute(
+                    "INSERT INTO albums (name, created_at) VALUES (?, ?)",
+                    (_clean_album_name(name), now),
+                ).lastrowid
+                conn.executemany(
+                    "INSERT OR IGNORE INTO album_photos (album_id, photo_id, added_at) "
+                    "VALUES (?, ?, ?)",
+                    ((album_id, pid, now) for pid in dict.fromkeys(photo_ids)),
+                )
+                ids.append(album_id)
+            if setting is not None:
+                set_setting(conn, *setting)
+    except sqlite3.IntegrityError as exc:
+        raise AlbumNameError(f"An album name is already taken: {exc}") from exc
+    return ids
+
+
+def last_scan_status(conn: sqlite3.Connection, source_id: int) -> str | None:
+    """Status of a source's latest scan run (``completed``, ``cancelled``, ...), or None."""
+    row = conn.execute(
+        "SELECT status FROM scan_runs WHERE source_id = ? ORDER BY id DESC LIMIT 1", (source_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
 # --- settings ---------------------------------------------------------------------------
 
 
