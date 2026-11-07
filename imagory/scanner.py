@@ -7,13 +7,14 @@ need no saved state: every finished file is committed, and a rescan skips it.
 
 from __future__ import annotations
 
+import json
 import logging
 import multiprocessing
 import os
 import sqlite3
 import threading
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,21 +174,72 @@ def diff_files(walked: list[WalkedFile], existing: list[db.FileState]) -> Diff:
 
 # --- cleaned sources --------------------------------------------------------------------
 
+# Settings key: the done cleanup runs whose metadata a cleaned source's file rows reflect.
+_METADATA_RUNS_KEY = "cleaned_metadata_runs:{id}:{added_at}"
 
-def load_output_metadata(root: Path) -> dict[str, db.OutputFileMeta]:
-    """What the cleanup output database inside ``root`` knows about its files, keyed by
-    folded relative path. Read on the coordinator; the database is opened read only.
 
-    A folder without ``.imagory/imagory.db`` gives an empty map (every file then follows the
-    plain-folder rules). A database that exists but can't be read raises
-    :class:`db.OutputDatabaseError`, so the scan stops before storing guessed dates.
+@dataclass(frozen=True)
+class OutputMetadata:
+    """A cleaned source's output database, as read at the start of a scan or recompute."""
+
+    by_path: Mapping[str, db.OutputFileMeta]  # folded relative path -> metadata
+    run_keys: frozenset[str]  # "<run id>@<finished_at>" of every done run
+    available: bool  # False: the folder has no output database
+
+    def confirmed(self, relative_path: str, content_hash: str | None) -> db.OutputFileMeta | None:
+        """The stored metadata of a file, only if the output database has it at this path
+        (ignoring ASCII case, like ``COLLATE NOCASE``) with the same contents. None means
+        the file was added or changed after the cleanup: the plain-folder rules apply."""
+        meta = self.by_path.get(fold_path(relative_path))
+        if meta is None or content_hash is None or meta.content_hash != content_hash:
+            return None
+        return meta
+
+
+NO_OUTPUT = OutputMetadata({}, frozenset(), False)
+
+
+def load_output_metadata(root: Path) -> OutputMetadata:
+    """What the cleanup output database inside ``root`` knows about its files and runs.
+    Read on the coordinator (or the thread that recomputes); opened read only.
+
+    A folder without ``.imagory/imagory.db`` gives :data:`NO_OUTPUT` (every file then
+    follows the plain-folder rules) and logs a warning. A database that exists but can't be
+    read raises :class:`db.OutputDatabaseError`, so nothing guessed is stored.
     """
     db_file = paths.cleanup_db_path(root)
     if not db_file.is_file():
         log.warning("Cleaned source %s has no %s; using the plain-folder rules", root, db_file)
-        return {}
-    rows = db.read_output_metadata(db_file)
-    return {fold_path(m.relative_path): m for m in rows}
+        return NO_OUTPUT
+    snapshot = db.read_output_database(db_file)
+    return OutputMetadata(
+        {fold_path(m.relative_path): m for m in snapshot.files},
+        frozenset(f"{r.id}@{r.finished_at}" for r in snapshot.runs if r.status == "done"),
+        True,
+    )
+
+
+def cleaned_date(file_id: int, meta: db.OutputFileMeta) -> db.RecomputedDate:
+    """A confirmed file's stored date and location; the date may be None (undated)."""
+    return db.RecomputedDate(
+        file_id,
+        meta.taken_at_local,  # None for an undated file: no mtime fallback (PRD §8.4)
+        meta.taken_at_utc,
+        meta.date_source,
+        None,
+        meta.latitude,
+        meta.longitude,
+    )
+
+
+def metadata_runs_key(source: db.Source) -> str:
+    # added_at too, so a source id reused after a removal never inherits the marker.
+    return _METADATA_RUNS_KEY.format(id=source.id, added_at=source.added_at)
+
+
+def recorded_metadata_runs(conn: sqlite3.Connection, source: db.Source) -> frozenset[str]:
+    """The run keys whose metadata the source's file rows already reflect."""
+    return frozenset(json.loads(db.get_setting(conn, metadata_runs_key(source)) or "[]"))
 
 
 # --- coordinator ------------------------------------------------------------------------
@@ -247,8 +299,8 @@ class Scanner:
         # sidecars read for files being processed (location is applied when storing).
         self._sidecar_of: dict[str, str] = {}
         self._sidecar_data: dict[str, Sidecar] = {}
-        # Cleaned source: folded output-relative path -> what the output database knows.
-        self._output_meta: dict[str, db.OutputFileMeta] = {}
+        # Cleaned source: what its output database knows (read once per scan).
+        self._output = NO_OUTPUT
 
     def cancel(self) -> None:
         """Stop queueing new work; in-flight results are still committed."""
@@ -322,12 +374,50 @@ class Scanner:
 
         jobs: list[tuple[int | None, WalkedFile]] = [(None, f) for f in diff.new]
         jobs.extend(diff.changed)
-        if not jobs:
-            return "cancelled" if self.cancelled else "completed"
-        if self.source.type == "cleaned":
-            self._output_meta = load_output_metadata(root)
-        self._process(jobs, counts, found=counts.found, disappeared=set(diff.disappeared))
-        return "cancelled" if self.cancelled else "completed"
+        cleaned = self.source.type == "cleaned"
+        if cleaned:
+            self._output = load_output_metadata(root)
+            seen_runs = recorded_metadata_runs(self.conn, self.source)
+            if self._output.run_keys - seen_runs:
+                # A later cleanup run may know more about files that didn't change on disk.
+                self._refresh_unchanged(walk.files, diff)
+        if jobs:
+            self._process(jobs, counts, found=counts.found, disappeared=set(diff.disappeared))
+        if self.cancelled:
+            return "cancelled"
+        if cleaned and self._output.available and self._output.run_keys != seen_runs:
+            # Only now: an interrupted scan refreshes again next time.
+            db.set_setting(
+                self.conn, metadata_runs_key(self.source), json.dumps(sorted(self._output.run_keys))
+            )
+        return "completed"
+
+    def _refresh_unchanged(self, walked: list[WalkedFile], diff: Diff) -> None:
+        """Reapply the output database's metadata (date, location, people, caption,
+        favourite, upload time) to the unchanged files it confirms, in batched transactions.
+        New and changed files get it when they are processed."""
+        on_disk = {fold_path(f.relative_path) for f in walked}
+        on_disk -= {fold_path(f.relative_path) for f in diff.new}
+        on_disk -= {fold_path(f.relative_path) for _, f in diff.changed}
+        targets = [
+            (row, meta)
+            for row in db.date_inputs(self.conn, self.source.id)
+            if fold_path(row.relative_path) in on_disk
+            and (meta := self._output.confirmed(row.relative_path, row.content_hash)) is not None
+        ]
+        for start in range(0, len(targets), self.commit_batch):
+            if self.cancelled:
+                return
+            batch = targets[start : start + self.commit_batch]
+            with db.transaction(self.conn):
+                db.apply_recomputed_dates(
+                    self.conn, self.source.id, [cleaned_date(row.id, m) for row, m in batch]
+                )
+                for row, m in batch:
+                    db.set_photo_takeout_metadata(
+                        self.conn, row.id, m.people, m.description, m.favorite, m.uploaded_at_utc
+                    )
+        log.info("Cleaned source %d: metadata refreshed for %d files", self.source.id, len(targets))
 
     def _match_sidecars(self, root: Path, walk: WalkResult) -> None:
         """Match every image of a Takeout source to its sidecar, folder by folder, and log the
@@ -454,7 +544,7 @@ class Scanner:
         A new file whose hash matches a missing file of this source is a move: the old
         row is re-pointed, keeping its id and first-seen date (PRD §8.2).
         """
-        meta = self._confirmed_output_meta(res)
+        meta = self._output.confirmed(res.relative_path, res.content_hash)
         taken_at_local, taken_at_utc, date_source = (
             (meta.taken_at_local, meta.taken_at_utc, meta.date_source)
             if meta is not None
@@ -507,15 +597,6 @@ class Scanner:
                 meta.uploaded_at_utc,
             )
         return outcome, stored
-
-    def _confirmed_output_meta(self, res: FileResult) -> db.OutputFileMeta | None:
-        """A cleaned source file's metadata from the output database, if the file is in it
-        (same path, ignoring case) with the same contents. Otherwise None: the file was
-        added or changed after the cleanup, and the plain-folder rules apply."""
-        meta = self._output_meta.get(fold_path(res.relative_path))
-        if meta is None or meta.content_hash != res.content_hash:
-            return None
-        return meta
 
     def _batches(self, files: list[WalkedFile]) -> Iterator[list[FileJob]]:
         for start in range(0, len(files), self.worker_batch):
