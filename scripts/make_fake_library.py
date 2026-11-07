@@ -30,12 +30,20 @@ expected sidecar (or null), the raw EXIF/JSON/filename times, and the expected
 expected ``taken_at_local`` of null means "``taken_at_utc`` converted with the computer's
 time zone", which the generator cannot know. Output is deterministic for a given seed.
 
+``--cleanup`` (with ``--takeout``) adds the Takeout cleanup cases: videos, a motion pair, an
+album with duplicate copies and a titled ``metadata.json``, Trash and Archive extras, odd
+titles, a corrupt JPEG, an unused sidecar and an ``-edited`` copy, plus a ``cleanup`` block in
+the manifest with ground truth for every file. It is opt-in so the plain Takeout fixture and
+its tests stay as they are. ``--second-account FIRST_OUT`` writes a second, smaller export
+that shares files and clashes with the first (see ``make_second_account``).
+
 Usage: uv run python scripts/make_fake_library.py OUT_DIR [--count 100000] [--takeout]
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import multiprocessing
 import os
@@ -517,8 +525,14 @@ class _TakeoutPlan:
         self.add(folder, name, style, utc, exif, "", case, style, side, name, extra={flag: True})
 
 
-def make_takeout(out: Path, count: int, duplicates: float, seed: int) -> dict:
-    """Write a synthetic Takeout export under ``out/Takeout`` and return the manifest."""
+def make_takeout(
+    out: Path, count: int, duplicates: float, seed: int, cleanup: bool = False
+) -> dict:
+    """Write a synthetic Takeout export under ``out/Takeout`` and return the manifest.
+
+    With ``cleanup=True`` it also writes the Takeout cleanup cases and adds a ``cleanup`` block
+    to the manifest (see ``_cleanup_block``); nothing else changes.
+    """
     plan = _TakeoutPlan(out, seed)
     rng = plan.rng
     unique = max(1, int(count * (1 - duplicates)))
@@ -606,6 +620,391 @@ def make_takeout(out: Path, count: int, duplicates: float, seed: int) -> dict:
         "other_json": other,
         "counts": dict(sorted(counts.items())),
     }
+    if cleanup:
+        extra = _add_cleanup_cases(out, plan, seed)
+        manifest["cleanup"] = _cleanup_block(out, plan.images, extra)
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    return manifest
+
+
+# --- Takeout cleanup fixtures (opt-in: --cleanup) ----------------------------------------------
+#
+# Extra cases for the Takeout cleanup feature (docs/takeout-cleanup-plan.md). They are added
+# after the normal export is complete and use their own random stream, so every file and every
+# existing manifest field is identical with or without ``cleanup=True``. The new photos are
+# deliberately NOT added to ``manifest["images"]`` (older tests compare it with the files on
+# disk); ``manifest["cleanup"]`` describes every file of the export instead, ground truth only.
+
+CL_YEAR = "Photos from 2004"  # no other generated folder uses 2004 (START is 2005)
+CL_ALBUM = "Cleanup album"  # folder name; its metadata.json title differs
+CL_ALBUM_TITLE = "Lisbon trip 2004"
+SUPPORTED = (".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif")
+NON_SIDECAR_JSON = {
+    "metadata.json",
+    "print-subscriptions.json",
+    "user-generated-memory-titles.json",
+}
+HEIC_NAME = "MOTION_0001.HEIC"
+
+
+def blake2b_hex(data: bytes) -> str:
+    """Same digest as ``imagory.thumbs.hash_bytes`` (BLAKE2b, 16 bytes, hex)."""
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
+
+
+def _write_sidecar(path: Path, title: str, utc: datetime, rng: random.Random) -> None:
+    """A minimal sidecar for a file the image worker does not render."""
+    payload = {
+        "title": title,
+        "description": "",
+        "creationTime": _timestamp(utc + timedelta(days=rng.randrange(1, 60))),
+        "photoTakenTime": _timestamp(utc),
+        "geoData": _geo(0.0, 0.0, 0.0),
+        "geoDataExif": _geo(0.0, 0.0, 0.0),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.utime(path, (_epoch(utc), _epoch(utc)))
+
+
+def _write_bytes(path: Path, data: bytes, utc: datetime) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    os.utime(path, (_epoch(utc), _epoch(utc)))
+
+
+def _date_truth(expected: dict) -> dict | None:
+    """Ground-truth date of a file: ``None`` when no sidecar, EXIF or filename gives one."""
+    if expected["date_source"] == "mtime":
+        return None
+    return {
+        "source": expected["date_source"],
+        "taken_at_local": expected["taken_at_local"],
+        "taken_at_utc": expected["taken_at_utc"],
+    }
+
+
+def _folder_kind(rel: str) -> str:
+    """``year``, ``album``, ``archive``, ``trash`` or ``root`` for a path relative to OUT."""
+    parts = rel.split("/")
+    if not rel.startswith(GP + "/") or len(parts) < 4:
+        return "root"
+    top = parts[2]
+    if top in ("Trash", "Archive"):
+        return top.lower()
+    return "year" if top.startswith("Photos from ") else "album"
+
+
+def _copy_with_sidecar(
+    out: Path,
+    src: str,
+    dst_folder: str,
+    name: str | None,
+    sidecar: str | None,
+    src_root: Path | None = None,
+) -> tuple[str, str | None]:
+    """Copy a file (and optionally its sidecar, same name) into a folder; returns both paths."""
+    dst = f"{GP}/{dst_folder}/{name or src.rsplit('/', 1)[1]}"
+    (out / dst).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2((src_root or out) / src, out / dst)
+    side = None
+    if sidecar:
+        side = f"{GP}/{dst_folder}/{sidecar.rsplit('/', 1)[1]}"
+        shutil.copy2((src_root or out) / sidecar, out / side)
+    return dst, side
+
+
+def _album_metadata(out: Path, folder: str, title: str, rng: random.Random) -> str:
+    rel = f"{GP}/{folder}/metadata.json"
+    meta = {
+        "title": title,
+        "description": "",
+        "access": "protected",
+        "date": _timestamp(datetime(2004, 7, 1) + timedelta(seconds=rng.randrange(86400))),
+    }
+    (out / rel).parent.mkdir(parents=True, exist_ok=True)
+    (out / rel).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return rel
+
+
+def _heic_bytes(rng: random.Random) -> bytes:
+    import io
+
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    buf = io.BytesIO()
+    _canvas(rng, 64, 48).save(buf, "HEIF")
+    return buf.getvalue()
+
+
+def _add_cleanup_cases(out: Path, plan: _TakeoutPlan, seed: int) -> dict[str, dict]:
+    """Write the cleanup cases into ``out``. Returns truth for files the plan does not know,
+    keyed by path: ``sidecar``, ``date`` (or absent), ``companion_of``, ``readable``."""
+    rng = random.Random(f"cleanup:{seed}")
+    saved = plan.rng, plan.index
+    plan.rng, plan.index = rng, 900_000
+    base = seed * 7_919 + 700_000_000
+    extra: dict[str, dict] = {}
+    start = len(plan.specs)
+
+    def photo(folder, name, day, hms, title=None, offset=60, sidecar=True, **kw):
+        utc = datetime(2004, day[0], day[1], *hms)
+        exif = utc + timedelta(minutes=offset) if offset is not None else None
+        side = sidecar_name(name, "plain") if sidecar else None
+        return plan.add(
+            folder, name, "cleanup", utc, exif, "", "tz_offset", "plain" if side else None, side,
+            (title or name) if side else None, seed=base + len(plan.specs), **kw,
+        )  # fmt: skip
+
+    p1 = photo(CL_YEAR, "IMG_20040315_101010.jpg", (3, 15), (10, 10, 10))
+    case_a = photo(CL_YEAR, "Case_Pair.jpg", (6, 10), (9, 0, 0))
+    photo(CL_ALBUM, "case_pair.JPG", (6, 11), (9, 0, 0))  # title differs only in case
+    photo(CL_YEAR, "a_b_c.jpg", (5, 2), (8, 30, 0), title="a/b:c.jpg")
+    photo(CL_YEAR, "Trip_ day 1.jpg", (5, 3), (8, 30, 0), title="Trip: day 1.jpg")
+    long_title = "Scanned slides from the old shoebox in the attic - box 3 of 12 - 2004.jpg"
+    photo(CL_YEAR, "Scanned slides from the old shoebox in.jpg", (4, 20), (7, 0, 0), long_title)
+    orig = photo(CL_YEAR, "Edited_Test.jpg", (4, 25), (12, 0, 0))
+    plan.add(  # an -edited copy: no sidecar of its own, it borrows the original's
+        CL_YEAR, "Edited_Test-edited.jpg", "cleanup", datetime(2004, 4, 25, 12), None, "",
+        "tz_offset", "plain", sidecar_name("Edited_Test.jpg", "plain"), "Edited_Test.jpg",
+        edited_from=orig, seed=base + 900,
+    )  # fmt: skip
+    photo("Archive", "CLN_archived.jpg", (8, 1), (6, 0, 0), extra={"archived": True})
+    photo("Trash", "CLN_trashed.jpg", (8, 2), (6, 0, 0), extra={"trashed": True})
+    _run_pool(_make_takeout_one, plan.specs[start:], 16)
+
+    # Exact duplicates of P1: a copy under another name in the same folder (no sidecar), an
+    # album copy with sidecar, and a Trash copy. Plus an album copy of the case-pair photo.
+    p1_entry = plan.images[p1]
+    p1_local, p1_utc = datetime(2004, 3, 15, 11, 10, 10), datetime(2004, 3, 15, 10, 10, 10)
+    p1_bare = _expected(None, p1_local, p1_utc, "")  # no sidecar: the EXIF time decides
+    for folder, name, with_side in (
+        (CL_YEAR, "IMG_20040315_101010 copy.jpg", False),
+        (CL_ALBUM, None, True),
+        ("Trash", None, False),
+    ):
+        side_src = p1_entry["sidecar"] if with_side else None
+        dst, side = _copy_with_sidecar(out, p1, folder, name, side_src)
+        expected = p1_entry["expected"] if with_side else p1_bare
+        plan.images[dst] = {**p1_entry, "sidecar": side, "copy_of": p1, "expected": expected}
+    dst, side = _copy_with_sidecar(out, case_a, CL_ALBUM, None, plan.images[case_a]["sidecar"])
+    plan.images[dst] = {**plan.images[case_a], "sidecar": side, "copy_of": case_a}
+
+    def media(folder, name, data, utc, style=None, ftime="", companion_of=None):
+        """A non-image file (video, MOV, HEIC) with an optional sidecar, as plain bytes."""
+        rel = f"{GP}/{folder}/{name}"
+        _write_bytes(out / rel, data, utc)
+        side = None
+        if style:
+            side = f"{GP}/{folder}/{sidecar_name(name, style)}"
+            _write_sidecar(out / side, name, utc, rng)
+        extra[rel] = {
+            "sidecar": side,
+            "date": _date_truth(_expected(_iso(utc) + "Z" if side else None, None, utc, ftime)),
+            "companion_of": companion_of,
+        }
+        return rel
+
+    def fake(head: bytes) -> bytes:
+        return head + rng.randbytes(1500)
+
+    mp4, qt = b"\x00\x00\x00\x18ftypmp42", b"\x00\x00\x00\x14ftypqt  "
+    v1 = media(CL_YEAR, "VID_20040401_120000.mp4", fake(mp4), datetime(2004, 4, 1, 12), "plain")
+    media(CL_YEAR, "MOV_0007.mov", fake(qt), datetime(2004, 4, 3, 9), "supplemental")
+    day2 = datetime(2004, 4, 2, 8)
+    media(CL_YEAR, "VID_20040402_080000.mp4", fake(mp4), day2, None, _iso(day2))
+    media(CL_YEAR, "clip_nodate.mp4", fake(mp4), datetime(2004, 4, 4, 8))
+    v1_dst, v1_side = _copy_with_sidecar(out, v1, CL_ALBUM, None, extra[v1]["sidecar"])
+    extra[v1_dst] = {**extra[v1], "sidecar": v1_side}
+
+    heic_utc = datetime(2004, 7, 20, 9)  # the motion pair, and a same-month HEIC with its name
+    heic = media(CL_YEAR, HEIC_NAME, _heic_bytes(rng), heic_utc, "supplemental")
+    media(CL_YEAR, "MOTION_0001.MOV", fake(qt), heic_utc, None, "", heic)
+    media(CL_ALBUM, HEIC_NAME, _heic_bytes(rng), datetime(2004, 7, 21, 9), "plain")
+
+    corrupt = f"{GP}/{CL_YEAR}/corrupt_cleanup.jpg"
+    corrupt_utc = datetime(2004, 9, 1, 5)
+    _write_bytes(out / corrupt, b"\xff\xd8\xff\xe0\x00\x10JFIF" + rng.randbytes(2000), corrupt_utc)
+    side = f"{GP}/{CL_YEAR}/{sidecar_name('corrupt_cleanup.jpg', 'plain')}"
+    _write_sidecar(out / side, "corrupt_cleanup.jpg", corrupt_utc, rng)
+    extra[corrupt] = {
+        "sidecar": side,
+        "date": _date_truth(_expected(_iso(corrupt_utc) + "Z", None, corrupt_utc, "")),
+        "readable": False,
+    }
+    unused = f"{GP}/{CL_YEAR}/UNUSED_cleanup.jpg.json"  # no file has this title
+    _write_sidecar(out / unused, "UNUSED_cleanup.jpg", datetime(2004, 10, 1), rng)
+
+    _album_metadata(out, CL_ALBUM, CL_ALBUM_TITLE, rng)
+    plan.rng, plan.index = saved
+    return extra
+
+
+def _read_title(path: Path) -> str | None:
+    try:
+        title = json.loads(path.read_text(encoding="utf-8")).get("title")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return title if isinstance(title, str) else None
+
+
+def _cleanup_block(out: Path, images: dict[str, dict], extra: dict[str, dict]) -> dict:
+    """Ground truth for every file of ``out/Takeout``, read back from disk plus the plan.
+
+    Per file (key: path relative to ``out``): ``kind`` (photo, other, json, sidecar, trash),
+    ``folder_kind``, ``size``, ``hash``/``hash_group``, ``title`` (the sidecar's title, for a
+    media file or a sidecar), ``sidecar`` (a media file's sidecar path), ``sidecar_of`` (a
+    sidecar's media file, null when unused), ``expected_date`` (null if nothing but the file
+    time could date it), ``albums`` (album JSON title, else folder name), ``companion_of``,
+    ``edited_of`` and ``readable``. No output names appear here.
+    """
+    info: dict[str, dict] = {
+        r: {
+            "sidecar": e["sidecar"],
+            "date": _date_truth(e["expected"]),
+            "edited_of": e["edited_from"],
+        }
+        for r, e in images.items()
+    }
+    info.update(extra)
+    sidecar_of = {
+        i["sidecar"]: r for r, i in info.items() if i.get("sidecar") and not i.get("edited_of")
+    }
+    paths = sorted(
+        p.relative_to(out).as_posix() for p in (out / "Takeout").rglob("*") if p.is_file()
+    )
+    album_titles: dict[str, str] = {}
+    for rel in paths:
+        if _folder_kind(rel) == "album":
+            folder = rel.split("/")[2]
+            meta = out / GP / folder / "metadata.json"
+            album_titles[folder] = (meta.is_file() and _read_title(meta)) or folder
+    files: dict[str, dict] = {}
+    groups: dict[str, dict] = {}
+    by_hash: dict[str, str] = {}
+    for rel in paths:
+        data = (out / rel).read_bytes()
+        digest = blake2b_hex(data)
+        gid = by_hash.setdefault(digest, f"g{len(by_hash) + 1:04d}")
+        name, ext = rel.rsplit("/", 1)[1], os.path.splitext(rel)[1].lower()
+        folder_kind = _folder_kind(rel)
+        is_sidecar = ext == ".json" and name not in NON_SIDECAR_JSON
+        if folder_kind == "trash":
+            kind = "trash"
+        elif ext == ".json":
+            kind = "sidecar" if is_sidecar else "json"
+        else:
+            kind = "photo" if ext in SUPPORTED else "other"
+        i = info.get(rel, {})
+        side = i.get("sidecar")
+        title = (
+            _read_title(out / rel) if is_sidecar else (_read_title(out / side) if side else None)
+        )
+        folder = rel.split("/")[2] if folder_kind == "album" else None
+        albums = [album_titles[folder]] if folder and ext != ".json" else []
+        files[rel] = {
+            "kind": kind,
+            "folder_kind": folder_kind,
+            "size": len(data),
+            "hash": digest,
+            "hash_group": gid,
+            "title": title,
+            "sidecar": side,
+            "sidecar_of": sidecar_of.get(rel) if is_sidecar else None,
+            "expected_date": i.get("date"),
+            "albums": albums,
+            "companion_of": i.get("companion_of"),
+            "edited_of": i.get("edited_of"),
+            "readable": i.get("readable", True) if ext in SUPPORTED else None,
+        }
+        group = groups.setdefault(gid, {"hash": digest, "members": [], "albums": set()})
+        group["members"].append(rel)
+        group["albums"].update(albums)
+    for group in groups.values():
+        group["albums"] = sorted(group["albums"])
+    return {
+        "version": 1,
+        "source_root": "Takeout",
+        "files": files,
+        "groups": groups,
+        "albums": album_titles,
+    }
+
+
+def make_second_account(out: Path, first_out: Path, seed: int = 2) -> dict:
+    """Write a second, small Takeout under ``out/Takeout`` for the merge test.
+
+    It reads ``first_out/manifest.json`` (made with ``cleanup=True``) and shares content
+    with it: the first account's P1 photo, its video and two more photos are byte-identical
+    copies at the same relative paths (``shared``), two other first-account photos reappear
+    at the same path with different content (``clashing``: same names, same sidecar names),
+    the album folder ``Cleanup album`` has the same title again and holds a copy of P1 plus a
+    new photo, and a few new photos are its own. ``out/manifest.json`` has the ``cleanup``
+    block (same schema) and a ``second_account`` block listing those paths.
+    """
+    first = json.loads((first_out / "manifest.json").read_text(encoding="utf-8"))["cleanup"]
+    rng = random.Random(f"second:{seed}")
+    plan = _TakeoutPlan(out, seed + 1000)
+    plan.rng, plan.index = rng, 950_000
+    base = seed * 7_919 + 800_000_000
+    p1 = f"{GP}/{CL_YEAR}/IMG_20040315_101010.jpg"
+    v1 = f"{GP}/{CL_YEAR}/VID_20040401_120000.mp4"
+    others = sorted(
+        r
+        for r, e in first["files"].items()
+        if e["kind"] == "photo" and e["folder_kind"] == "year" and e["sidecar"]
+        and not e["edited_of"] and CL_YEAR not in r
+    )  # fmt: skip
+    picks = rng.sample(others, min(4, len(others)))
+    shared = [p1, v1, *picks[:2]]
+    clashing = picks[2:4]
+    info: dict[str, dict] = {}
+
+    def carry(rel: str, folder: str | None = None) -> None:
+        e = first["files"][rel]
+        dst, side = _copy_with_sidecar(
+            out, rel, folder or rel.split("/")[2], None, e["sidecar"], first_out
+        )
+        info[dst] = {"sidecar": side, "date": e["expected_date"]}
+
+    for rel in shared:
+        carry(rel)
+    carry(p1, CL_ALBUM)  # same bytes, now also in the same-titled album
+    for n, rel in enumerate(clashing):
+        e = first["files"][rel]
+        folder, name = rel.split("/")[2], rel.rsplit("/", 1)[1]
+        utc = datetime(int(folder[-4:]), 1, 1) + timedelta(seconds=rng.randrange(365 * 86400))
+        plan.add(
+            folder, name, "second_clash", utc, utc, "", "same", "plain",
+            e["sidecar"].rsplit("/", 1)[1], e["title"], seed=base + n,
+        )  # fmt: skip
+    own = [(CL_YEAR, f"SECOND_{n:04d}.jpg", datetime(2004, 11, 1 + n, 10)) for n in range(3)]
+    own.append((CL_ALBUM, "SECOND_album.jpg", datetime(2004, 12, 5, 10)))
+    for n, (folder, name, utc) in enumerate(own):
+        plan.add(
+            folder, name, "second_own", utc, utc, "", "same", "plain",
+            sidecar_name(name, "plain"), name, seed=base + 10 + n,
+        )  # fmt: skip
+    _run_pool(_make_takeout_one, plan.specs, 16)
+    _album_metadata(out, CL_ALBUM, CL_ALBUM_TITLE, rng)
+    html = out / "Takeout" / "archive_browser.html"
+    shutil.copy2(first_out / "Takeout" / "archive_browser.html", html)
+
+    block = _cleanup_block(out, plan.images, info)
+    first_hashes = {e["hash"] for e in first["files"].values()}
+    manifest = {
+        "version": 1,
+        "seed": seed,
+        "account": 2,
+        "cleanup": block,
+        "second_account": {
+            "shared": sorted(shared),
+            "clashing": sorted(clashing),
+            "album_clash": CL_ALBUM,
+            "shared_hashes": sorted({e["hash"] for e in block["files"].values()} & first_hashes),
+        },
+    }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     return manifest
 
@@ -617,13 +1016,27 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--duplicates", type=float, default=0.05, help="share of exact copies")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--takeout", action="store_true", help="write a Google Takeout export")
+    parser.add_argument(
+        "--cleanup", action="store_true", help="with --takeout: add the Takeout cleanup cases"
+    )
+    parser.add_argument(
+        "--second-account",
+        type=Path,
+        metavar="FIRST_OUT",
+        help="write a second, smaller Takeout into OUT that overlaps the one in FIRST_OUT "
+        "(made with --takeout --cleanup)",
+    )
     args = parser.parse_args(argv)
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
+    if args.second_account:
+        make_second_account(out, args.second_account, args.seed)
+        print(f"Wrote a second-account Takeout to {out}")
+        return
     if args.takeout:
-        manifest = make_takeout(out, args.count, args.duplicates, args.seed)
+        manifest = make_takeout(out, args.count, args.duplicates, args.seed, args.cleanup)
         elapsed = time.perf_counter() - started
         print(
             f"Wrote a Takeout export with {len(manifest['images']):,} images and "
