@@ -4,8 +4,7 @@ Filesystem only: no SQL, no Qt. Safety rules:
 
 * ``src`` is only ever opened ``"rb"`` (and ``stat``-ed). Nothing next to it is
   written, renamed or deleted.
-* Every write, ``os.replace`` and delete targets ``dest``, ``<dest>.part`` or a
-  ``*.part`` file in the folder given to :func:`remove_stale_parts`.
+* Every write, ``os.replace`` and delete targets ``dest`` or ``<dest>.part``.
 * An existing ``dest`` is never overwritten: identical content is accepted as done,
   anything else is refused.
 * Ordinary I/O failures (and cancel) never raise: the ``.part`` is removed and
@@ -156,25 +155,3 @@ def already_done(dest: Path, size: int, mtime_ns: int) -> bool:
         and st.st_size == size
         and abs(st.st_mtime_ns - mtime_ns) <= MTIME_TOLERANCE_NS
     )
-
-
-def remove_stale_parts(folder: Path) -> int:
-    """Delete leftover ``*.part`` regular files under ``folder``; return the count.
-
-    Walks without following symlinks; symlinks (even named ``.part``) and
-    everything that isn't a regular ``.part`` file are left alone.
-    """
-    removed = 0
-    for root, _dirs, files in os.walk(folder, followlinks=False):
-        for name in files:
-            if not name.endswith(PART_SUFFIX):
-                continue
-            path = os.path.join(root, name)
-            try:
-                if os.path.islink(path) or not os.path.isfile(path):
-                    continue
-                os.unlink(path)
-                removed += 1
-            except OSError:
-                continue
-    return removed

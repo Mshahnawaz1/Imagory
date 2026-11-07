@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from imagory import cleanup_copy
-from imagory.cleanup_copy import already_done, copy_verified, remove_stale_parts
+from imagory.cleanup_copy import already_done, copy_verified
 from imagory.thumbs import hash_bytes
 from tests.fs_snapshot import assert_unchanged, snapshot
 
@@ -159,27 +159,6 @@ def test_already_done(out):
     assert not already_done(f, 3, 6_000_000_000)
     assert not already_done(out / "missing", 3, 5_000_000_000)
     assert not already_done(out, 3, 5_000_000_000)
-
-
-def test_remove_stale_parts_only_part_files(src_dir, out):
-    before = snapshot(src_dir)
-    (out / "sub").mkdir()
-    (out / "a.jpg.part").write_bytes(b"x")
-    (out / "sub" / "b.png.part").write_bytes(b"x")
-    (out / "keep.jpg").write_bytes(b"x")
-    (out / "part").write_bytes(b"x")
-    (out / "dir.part").mkdir()
-    (out / "dir.part" / "inner.txt").write_bytes(b"x")
-    # symlinks must be left alone and never followed
-    (out / "link.part").symlink_to(src_dir / "a.jpg")
-    (out / "dirlink").symlink_to(src_dir, target_is_directory=True)
-    assert remove_stale_parts(out) == 2
-    assert not (out / "a.jpg.part").exists()
-    assert not (out / "sub" / "b.png.part").exists()
-    assert (out / "keep.jpg").exists() and (out / "part").exists()
-    assert (out / "dir.part" / "inner.txt").exists()
-    assert (out / "link.part").is_symlink()
-    assert_unchanged(src_dir, before)
 
 
 def test_existing_dest_with_other_content_is_never_overwritten(src_dir, out):
