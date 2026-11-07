@@ -26,3 +26,10 @@ Short dated entries of what landed and the key facts behind it. Details live in 
 - Safety pass on `main`: all writes under the output folder, `.imagory/` or the library.
   Removed the unused `cleanup_copy.remove_stale_parts(folder)` (it deleted every `*.part` under
   a folder); the pipeline removes only its own targets' `.part` files.
+
+## 2026-11-07: Release 0.2.0 prep (branch `release/v0.2.0`)
+
+- Version 0.2.0. Linux x86_64 build added at the author's request (PRD §4, §13, §16):
+  `.github/workflows/linux-build.yml`, Ubuntu 22.04 runner (glibc 2.35), `.tar.gz` artifact.
+- Release steps in `docs/tasks.md`; notes in `docs/release-notes-0.2.0.md`. Open: HEIC
+  licence (PRD §18 question 2).

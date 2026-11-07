@@ -10,6 +10,15 @@ Waves 1 and 2 are merged. Remaining V1 work:
 - [ ] Rerun the 100k bench on Windows and judge scrolling by eye. Judged smooth by eye on Windows 11 (.exe, 100,000 plain photos, full scan about 10 minutes); `scripts/bench.py` numbers not yet taken on Windows
 - [ ] Retest "Show in Explorer" on Windows: the first Windows 11 test opened a default folder instead of the photo's (paths with spaces); fixed, untested on Windows
 
+## Release 0.2.0
+
+Steps in order; notes to paste are in `docs/release-notes-0.2.0.md`.
+
+- [ ] Decide the HEIC licence question for a public release (PRD §18 question 2): pre-release with the note, or resolve first
+- [ ] Push `main`, then run **Windows build** and **Linux build** in Actions (tests ticked); download both artifacts
+- [ ] Smoke test `Imagory.exe` on Windows (add a folder, a small Clean up Takeout run) and the Linux binary on Ubuntu 22.04 or newer
+- [ ] Tag `v0.2.0` on the release commit, push the tag, and publish the GitHub release with both files
+
 ## Takeout cleanup: Windows checks
 
 The feature is merged (see Completed). Still to check on real Windows, not WSL:

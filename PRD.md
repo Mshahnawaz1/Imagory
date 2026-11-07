@@ -40,18 +40,18 @@ Imagory is a free, open source, fully offline Windows application that helps non
 
 | Item | Decision |
 | --- | --- |
-| Platform | Windows 10 and Windows 11 (64-bit) |
+| Platform | Windows 10 and Windows 11 (64-bit), the main target. Linux x86_64 as a best-effort second build from 0.2 (section 13) |
 | Language | Python 3.12 |
 | Project and dependency management | uv (`pyproject.toml` plus a committed `uv.lock`) |
 | UI framework | PySide6 (Qt 6) |
 | Storage | SQLite (Python built-in sqlite3) |
 | Image reading | Pillow, plus pillow-heif for HEIC |
 | Hashing | BLAKE2b from Python hashlib (built in, fast), read in 1 MB chunks |
-| Packaging | PyInstaller. Single-file .exe first, zipped folder build added later (section 13) |
+| Packaging | PyInstaller. Single-file .exe first, zipped folder build added later; a single-file Linux binary in a `.tar.gz` from the same spec (section 13) |
 | Tests | pytest |
 | License | MIT |
 | Distribution | GitHub releases, no payment, no code signing |
-| Other platforms | Not in scope, but avoid Windows-only code where it costs nothing |
+| Other platforms | macOS and Linux ARM are not in scope; avoid platform-only code where it costs nothing |
 
 ## 5. Roadmap
 
@@ -378,6 +378,7 @@ cleanup_copies id, run_id, file_id NULL, extra_file_id NULL, source_relative_pat
 - **A zipped folder build** (`--onedir`, still launched by double-clicking `Imagory.exe`) is added later as a second download, built from the same spec file. It starts faster and triggers fewer antivirus warnings.
 - To keep both builds working without code changes: locate bundled resources through a single helper that handles PyInstaller's temporary folder (`sys._MEIPASS`) and normal runs, and never write data next to the executable.
 - Known single-file trade-offs: startup of a few seconds while it unpacks, and more antivirus false positives.
+- **Linux build (from 0.2, best effort):** the same spec builds a single-file `Imagory` binary on Linux, shipped as `Imagory-<version>-linux-x86_64.tar.gz` (with `LICENSE` and `THIRD_PARTY_LICENSES.txt`) so it keeps its executable bit. It is built on the oldest supported Ubuntu runner (22.04, glibc 2.35), because a PyInstaller binary runs only on systems with the same or a newer glibc. It needs a desktop with X11 or XWayland and the usual Qt system libraries (some distros need `libxcb-cursor0`). The library folder is `$XDG_DATA_HOME/imagory`; "Show in folder" opens the containing folder without selecting the file. No desktop entry, AppImage or Flatpak yet. Built and smoke-tested in CI (`.github/workflows/linux-build.yml`); tested by hand on Ubuntu and WSL only.
 - Published on GitHub releases. Free, unsigned at first. The README warns that Windows SmartScreen or antivirus may show warnings, and explains how to proceed.
 - **Size expectation:** roughly 30 to 60 MB, reducible to roughly 25 to 40 MB with a clean virtual environment, excluded modules, and unneeded Qt plugins removed. Measured on Windows 11 (V1, 2026-10-31): 49.4 MB.
 - **Licensing:** all Imagory code is released under the **MIT licence** (a `LICENSE` file in the repository root, and the licence shown in the app's About dialog).
@@ -504,6 +505,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Cleanup report | Plain UTF-8 text with fixed sections (Counts, Trash skipped, Duplicates, Unmatched sidecars, Unreadable files, Renames, Not accounted for); control characters in names are escaped so one entry stays on one line. `metadata.json` keys follow the export fields in order, with `null` for unknown values |
 | Cleanup wizard | Cancel stops the current job without asking; only closing the wizard during work asks first, and the job then keeps cancelling in the background. A job requested while the previous thread is ending waits in a queue that Cancel clears. Closing the app during a copy waits for the current file |
 | Fake Takeout cleanup cases | Opt-in (`make_fake_library.py --takeout --cleanup`), so the existing `--takeout` output and manifest don't change; `manifest["cleanup"]` is the ground truth. `--second-account` makes a second export sharing and clashing with the first |
+| Linux build | Added for 0.2 at the author's request (2026-11-07), reversing "other platforms not in scope" for Linux x86_64 only. Same PyInstaller spec and code, no Linux-only features; built on Ubuntu 22.04 for the widest glibc reach; Windows stays the main target and the one the section 7.5 checks cover |
 | Editable people | Not in V1: people from Takeout are read-only. Planned for V1.x and flagged as needing planning (section 14). Considered and rejected: storing people as albums, because a rescan would undo manual edits (scans touch people but never albums) |
 
 ## 17. Risks

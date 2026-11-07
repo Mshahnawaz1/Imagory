@@ -1,0 +1,52 @@
+# Imagory 0.2.0
+
+A free, open source, offline photo browser for your local folders and Google Takeout
+exports.
+
+**Your photos stay yours.** Imagory makes no network connections: no telemetry, no
+accounts, no update checks. It only reads your photos and never changes, moves, renames or
+deletes them. Clean up Takeout writes copies only into an output folder you pick.
+
+## What's new since 0.1
+
+- **Several sources:** add photo folders and extracted Takeout exports; rename, relocate,
+  rescan or remove them in **Sources…**. Moved files are recognised, and missing files are
+  hidden, not forgotten.
+- **Google Takeout:** dates, places, captions, favourites and the people tagged in Google
+  Photos are read from the JSON files. Trash is skipped.
+- **Dates:** from Takeout, EXIF (with its time zone when known) or the filename, including
+  Android `IMG_`, `VID_`, `PXL_`, WhatsApp and screenshot names.
+- **Exact duplicates** show once, wherever they are.
+- **Grid and viewer:** a fast grid with month headers for 100,000 photos, a viewer with
+  zoom and an info panel, and Show in folder.
+- **Search and filters**, including by person. **Albums**.
+- **Clean up Takeout…:** makes a tidy copy of a Takeout export, with one file per photo in
+  `YYYY/MM` folders, the original file names, and no JSON clutter. All the metadata is kept
+  in a database and a plain-text `metadata.json`. Every copy is verified, the original is
+  never touched, and the cleaned folder can be added to your library with its albums.
+- **Linux build:** a single x86_64 binary for Ubuntu 22.04 or newer (best effort).
+
+## Downloads
+
+| File | For |
+| --- | --- |
+| `Imagory.exe` | Windows 10 and 11, 64-bit. Double-click to run, nothing to install |
+| `Imagory-0.2.0-linux-x86_64.tar.gz` | Linux x86_64 with X11 or XWayland. Unpack, then run `./Imagory` |
+
+## Known limits
+
+- **Not code-signed.** Windows SmartScreen may say "Windows protected your PC": click
+  **More info**, then **Run anyway**. Some antivirus tools flag unsigned single-file
+  programs.
+- Tested by hand on Windows 11 only so far; Windows 10 and the Linux build have had less
+  testing. Takeout cleanup has been tested on generated exports, not yet on many real ones.
+- Takeout zips must be extracted first (zip support is planned).
+- Linux: on some distros Qt needs `libxcb-cursor0`; Show in folder opens the folder
+  without selecting the photo.
+- Your library from the early 0.1 test build is not carried over.
+
+## Licence
+
+Imagory is MIT-licensed. Bundled components keep their own licences, listed in
+`THIRD_PARTY_LICENSES.txt`. HEIC support (pillow-heif) bundles the GPLv2 x265 library, which
+makes that component GPLv2 as a whole; how to handle this in later releases is still open.

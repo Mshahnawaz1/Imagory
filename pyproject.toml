@@ -1,6 +1,6 @@
 [project]
 name = "imagory"
-version = "0.1.0"
+version = "0.2.0"
 description = "Offline Windows photo browser for local folders and Google Takeout exports"
 authors = [
     { name = "Mshahnawaz1", email = "shahnawaz919956@gmail.com" }

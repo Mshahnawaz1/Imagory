@@ -50,7 +50,7 @@ Create new modules as the work needs them.
 - Never write data next to the executable.
 
 ## Development environment
-- Development happens on Linux (WSL); the target is Windows 10/11. Avoid Windows-only code where it costs nothing, and keep Windows behaviour (case-insensitive paths, junctions, `%LOCALAPPDATA%`) correct.
+- Development happens on Linux (WSL); the main target is Windows 10/11, and a best-effort Linux x86_64 binary is also released (PRD §13). Avoid Windows-only code where it costs nothing, and keep Windows behaviour (case-insensitive paths, junctions, `%LOCALAPPDATA%`) correct.
 - PyInstaller `--onefile` builds and the `.exe` checks in PRD §7.5 must run on real Windows, not WSL. Say so instead of claiming a Windows build was verified.
 
 ## Commands

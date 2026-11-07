@@ -2,7 +2,7 @@
 
 # Imagory
 
-A free, open source photo browser for Windows. Point it at your photo folders and
+A free, open source photo browser for Windows (and Linux). Point it at your photo folders and
 extracted Google Takeout exports and get one fast, browsable library.
 
 > **Your photos stay yours.** Imagory is fully offline. It makes no network connections:
@@ -92,13 +92,29 @@ first by the date the photo was taken (EXIF), then a date in the filename (such 
 
 ### Where Imagory keeps its data
 
-The library folder is `%LOCALAPPDATA%\Imagory\` and contains `imagory.db` (the database),
+The library folder is `%LOCALAPPDATA%\Imagory\` on Windows and `~/.local/share/imagory/`
+on Linux (or `$XDG_DATA_HOME/imagory`). It contains `imagory.db` (the database),
 `thumbs\` (a thumbnail cache you can delete at any time), and `logs\`. **Help > Open log
 folder** opens the logs, for example to attach them to a GitHub issue. Logs are never sent
 anywhere.
 
 A library created by the early V0 test build is not carried over: Imagory starts with an
 empty library and you add your folders again. Your photos are not affected.
+
+### Running on Linux
+
+Download `Imagory-<version>-linux-x86_64.tar.gz` from the release, then:
+
+```sh
+tar -xzf Imagory-0.2.0-linux-x86_64.tar.gz
+./Imagory-0.2.0-linux-x86_64/Imagory
+```
+
+It is a single 64-bit (x86_64) program that runs on Ubuntu 22.04 or newer and other distros
+of the same age. It needs a desktop with X11 or XWayland. If it doesn't start, install Qt's
+system libraries (on Ubuntu or Debian: `sudo apt install libxcb-cursor0 libxkbcommon-x11-0
+libegl1`). Windows is the main platform; the Linux build has had less testing, and
+**Show in folder** opens the folder without selecting the photo.
 
 ### Windows SmartScreen and antivirus warnings
 
@@ -110,7 +126,7 @@ build Imagory yourself from source (below).
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/). Development happens on Linux (WSL) or Windows;
-the target is Windows 10/11.
+the main target is Windows 10/11, with a Linux x86_64 build as well.
 
 ```sh
 uv sync                                    # install dependencies into .venv
@@ -162,6 +178,10 @@ uv run pyinstaller --noconfirm --clean imagory.spec
 ```
 
 The result is `dist\Imagory.exe`, a single file.
+
+The same command on Linux builds `dist/Imagory`. Release builds of both come from GitHub
+Actions (**Windows build** and **Linux build**, run by hand); the Linux one is built on
+Ubuntu 22.04 so it also runs on older distros.
 
 ## Licence
 

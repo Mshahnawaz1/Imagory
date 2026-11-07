@@ -1,5 +1,5 @@
 # PyInstaller spec for Imagory.  Build with:  uv run pyinstaller imagory.spec
-# Produces a single-file build (dist/Imagory.exe on Windows). The same spec will later
+# Produces a single-file build (dist/Imagory.exe on Windows, dist/Imagory on Linux). The same spec will later
 # produce the zipped folder build (PRD §13) by switching ONEFILE to False.
 
 ONEFILE = True
