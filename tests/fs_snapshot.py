@@ -7,13 +7,18 @@ from pathlib import Path
 
 
 def snapshot(root: Path) -> dict[str, tuple[int, int]]:
-    """Map every file under ``root`` (dot folders included) to ``(size, mtime_ns)``.
+    """Map every file and folder under ``root`` (dot folders included) to ``(size, mtime_ns)``.
 
     Symlinks are not followed, and a symlink's own metadata is recorded.
-    Keys are ``/``-separated paths relative to ``root``.
+    Keys are ``/``-separated paths relative to ``root``. Folders end in ``/`` and have size 0,
+    so a new empty folder, or a file created and deleted again, is caught by the folder's mtime.
     """
     result: dict[str, tuple[int, int]] = {}
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames:
+            path = Path(dirpath) / name
+            st = os.stat(path, follow_symlinks=False)
+            result[path.relative_to(root).as_posix() + "/"] = (0, st.st_mtime_ns)
         for name in filenames:
             path = Path(dirpath) / name
             st = os.stat(path, follow_symlinks=False)
