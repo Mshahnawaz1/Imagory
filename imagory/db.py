@@ -2058,6 +2058,22 @@ def finalise_run(
                     (cleaned_source_id, c.target_relative_path, size, mtime_ns, c.extra_file_id),
                 ).rowcount
 
+        # Kept rows already in the output (earlier runs) take the best date of this run's
+        # duplicates too (lead decision, wave 2). The files stay where they are on disk.
+        for file_id, extra_id in conn.execute(
+            "SELECT DISTINCT o.file_id, o.extra_file_id FROM file_origins o "
+            "LEFT JOIN files f ON f.id = o.file_id "
+            "LEFT JOIN extra_files e ON e.id = o.extra_file_id "
+            "WHERE o.run_id = ? AND (f.source_id = ? OR e.source_id = ?)",
+            (run_id, cleaned_source_id, cleaned_source_id),
+        ).fetchall():
+            if file_id is not None:
+                photo_id = _keep_best_file_date(conn, file_id)
+                if photo_id is not None:
+                    photo_ids.add(photo_id)
+            else:
+                _merge_extra_duplicates(conn, extra_id, temp_source_id)
+
         # PRD §8.4: a cleaned source never dates a file by its modified time.
         photo_ids.update(
             _photo_ids_of(conn, "source_id = ? AND date_source = 'mtime'", (cleaned_source_id,))
@@ -2310,6 +2326,148 @@ def export_files(conn: sqlite3.Connection, cleaned_source_id: int) -> list[Expor
         )
     result.sort(key=lambda f: (f.path.casefold(), f.path))
     return result
+
+
+# Pipeline helpers (imagory/cleanup_run.py, wave 2).
+
+
+def connect_readonly(path: Path | str) -> sqlite3.Connection:
+    """Open an existing database read only (no migration, no journal change), e.g. to look
+    at a cleanup output before the user starts. Raises ``sqlite3.OperationalError`` when the
+    file is missing or not a database."""
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
+    return conn
+
+
+@dataclass(frozen=True)
+class CleanupFileRow:
+    """What the pipeline needs to know about one ``files`` row."""
+
+    id: int
+    relative_path: str
+    size: int
+    modified_time: int
+    content_hash: str | None
+    status: str
+    sidecar_relative_path: str | None
+    taken_at_local: str | None
+    taken_at_utc: str | None
+    date_source: str | None
+
+
+def list_cleanup_files(conn: sqlite3.Connection, source_id: int) -> list[CleanupFileRow]:
+    """A source's file rows (any status), by path."""
+    rows = conn.execute(
+        "SELECT id, relative_path, size, modified_time, content_hash, status, "
+        "sidecar_relative_path, taken_at_local, taken_at_utc, date_source FROM files "
+        "WHERE source_id = ? ORDER BY relative_path, id",
+        (source_id,),
+    )
+    return [CleanupFileRow(*r) for r in rows]
+
+
+def delete_extra_files(conn: sqlite3.Connection, ids: Iterable[int]) -> int:
+    """Delete extra-file rows (stale stage 3 rows of a temporary source). An origin or copy
+    still pointing at one makes this fail. Returns how many were deleted."""
+    return sum(
+        conn.execute("DELETE FROM extra_files WHERE id = ?", (i,)).rowcount for i in list(ids)
+    )
+
+
+def best_real_dates(conn: sqlite3.Connection, source_id: int) -> dict[str, DateResult]:
+    """The best non-mtime date (PRD §8.4, across copies) per content hash, over a source's
+    present files and its extra files. Hashes with no such date are absent."""
+    found: dict[str, list[DateResult]] = {}
+    for table, extra in (("files", " AND status = 'ok'"), ("extra_files", "")):
+        for h, local, utc, source in conn.execute(
+            f"SELECT content_hash, taken_at_local, taken_at_utc, date_source FROM {table} "
+            f"WHERE source_id = ? AND content_hash IS NOT NULL AND taken_at_local IS NOT NULL "
+            f"AND date_source IS NOT NULL AND date_source <> 'mtime'{extra}",
+            (source_id,),
+        ):
+            if source in SOURCE_RANK:
+                found.setdefault(h, []).append(DateResult(local, utc, source))
+    result: dict[str, DateResult] = {}
+    for h, dates in found.items():
+        best = best_photo_date(dates)
+        if best is not None:
+            result[h] = best
+    return result
+
+
+@dataclass(frozen=True)
+class CopyJob:
+    """A planned copy with what copying it needs, from its kept (input) row."""
+
+    id: int
+    file_id: int | None
+    extra_file_id: int | None
+    source_relative_path: str
+    target_relative_path: str
+    status: str
+    error: str | None
+    content_hash: str | None
+    size: int
+    modified_time: int
+
+
+def copy_jobs(conn: sqlite3.Connection, run_id: int, status: str | None = None) -> list[CopyJob]:
+    """A run's copies joined to their kept row (hash, size, input mtime), in plan order."""
+    sql = (
+        "SELECT c.id, c.file_id, c.extra_file_id, c.source_relative_path, "
+        "c.target_relative_path, c.status, c.error, "
+        "COALESCE(f.content_hash, e.content_hash), COALESCE(f.size, e.size, 0), "
+        "COALESCE(f.modified_time, e.modified_time, 0) FROM cleanup_copies c "
+        "LEFT JOIN files f ON f.id = c.file_id "
+        "LEFT JOIN extra_files e ON e.id = c.extra_file_id WHERE c.run_id = ?"
+    )
+    params: tuple = (run_id,)
+    if status is not None:
+        sql += " AND c.status = ?"
+        params = (run_id, status)
+    return [CopyJob(*r) for r in conn.execute(sql + " ORDER BY c.id", params)]
+
+
+def copy_status_counts(conn: sqlite3.Connection, run_id: int) -> dict[str, int]:
+    """How many of a run's copies are ``pending``, ``done`` and ``error`` (all keys present)."""
+    counts = dict.fromkeys(("pending", "done", "error"), 0)
+    for status, n in conn.execute(
+        "SELECT status, COUNT(*) FROM cleanup_copies WHERE run_id = ? GROUP BY status", (run_id,)
+    ):
+        counts[status] = n
+    return counts
+
+
+def count_origins(conn: sqlite3.Connection, run_id: int) -> int:
+    return conn.execute("SELECT COUNT(*) FROM file_origins WHERE run_id = ?", (run_id,)).fetchone()[
+        0
+    ]
+
+
+def run_duplicates(
+    conn: sqlite3.Connection, run_id: int, temp_source_id: int
+) -> list[tuple[str, int]]:
+    """``(input path, size)`` of a run's origins that are not copied themselves (the
+    duplicates skipped), while the temporary source still exists. By path."""
+    return [
+        (r[0], r[1] or 0)
+        for r in conn.execute(
+            # Exact (BINARY) path comparisons: two input files may differ only in case.
+            "SELECT o.original_relative_path, COALESCE(f.size, e.size) FROM file_origins o "
+            "LEFT JOIN files f ON f.source_id = ? "
+            "AND f.relative_path = o.original_relative_path COLLATE BINARY "
+            "LEFT JOIN extra_files e ON e.source_id = ? "
+            "AND e.relative_path = o.original_relative_path COLLATE BINARY "
+            "WHERE o.run_id = ? AND NOT EXISTS (SELECT 1 FROM cleanup_copies c "
+            "WHERE c.run_id = o.run_id "
+            "AND c.source_relative_path = o.original_relative_path COLLATE BINARY) "
+            "ORDER BY o.original_relative_path, o.id",
+            (temp_source_id, temp_source_id, run_id),
+        )
+    ]
 
 
 # --- settings ---------------------------------------------------------------------------
