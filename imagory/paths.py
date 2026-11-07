@@ -8,6 +8,7 @@ from pathlib import Path
 
 LIBRARY_ENV = "IMAGORY_LIBRARY"
 DB_NAME = "imagory.db"
+CLEANUP_DIR_NAME = ".imagory"
 
 
 def library_dir() -> Path:
@@ -43,6 +44,36 @@ def thumbs_dir(root: Path) -> Path:
 
 def logs_dir(root: Path) -> Path:
     return root / "logs"
+
+
+def cleanup_dir(output: Path) -> Path:
+    """Return the hidden ``.imagory`` folder inside a cleanup output folder."""
+    return output / CLEANUP_DIR_NAME
+
+
+def cleanup_db_path(output: Path) -> Path:
+    """Return the database path inside a cleanup output folder."""
+    return cleanup_dir(output) / DB_NAME
+
+
+def cleanup_thumbs_dir(output: Path) -> Path:
+    """Return the thumbnail folder inside a cleanup output folder."""
+    return cleanup_dir(output) / "thumbs"
+
+
+def cleanup_reports_dir(output: Path) -> Path:
+    """Return the report folder inside a cleanup output folder."""
+    return cleanup_dir(output) / "reports"
+
+
+def cleanup_json_dir(output: Path) -> Path:
+    """Return the folder holding unused JSON files copied from a Takeout export."""
+    return cleanup_dir(output) / "takeout-json"
+
+
+def metadata_json_path(output: Path) -> Path:
+    """Return the path of the plain-text ``metadata.json`` in a cleanup output folder."""
+    return cleanup_dir(output) / "metadata.json"
 
 
 def resource_path(relative: str) -> Path:

@@ -31,3 +31,24 @@ def test_windows_default(monkeypatch, tmp_path):
 def test_resource_path_meipass(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     assert paths.resource_path("icons/a.png") == Path(tmp_path) / "icons/a.png"
+
+
+def test_cleanup_path_helpers_exact_results(tmp_path):
+    out = tmp_path / "out"
+    assert paths.cleanup_dir(out) == out / ".imagory"
+    assert paths.cleanup_db_path(out) == out / ".imagory" / "imagory.db"
+    assert paths.cleanup_thumbs_dir(out) == out / ".imagory" / "thumbs"
+    assert paths.cleanup_reports_dir(out) == out / ".imagory" / "reports"
+    assert paths.cleanup_json_dir(out) == out / ".imagory" / "takeout-json"
+    assert paths.metadata_json_path(out) == out / ".imagory" / "metadata.json"
+
+
+def test_cleanup_path_helpers_create_nothing(tmp_path):
+    out = tmp_path / "out"
+    paths.cleanup_dir(out)
+    paths.cleanup_db_path(out)
+    paths.cleanup_thumbs_dir(out)
+    paths.cleanup_reports_dir(out)
+    paths.cleanup_json_dir(out)
+    paths.metadata_json_path(out)
+    assert not out.exists()
