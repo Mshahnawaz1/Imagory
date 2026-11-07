@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from imagory.cleanup_run import (
     input_is_source,
     match_other_files,
     storage_warning,
+    unfinished_run,
 )
 from imagory.cleanup_types import CleanupReport, Rename
 from imagory.thumbs import hash_bytes
@@ -471,8 +473,9 @@ def test_cancel_during_copy_then_resume(tmp_path):
     for job in done_jobs:
         st = (out / job.target_relative_path).stat()
         stamps[job.target_relative_path] = (st.st_ino, st.st_ctime_ns, st.st_mtime_ns)
-    # A leftover .part from the interrupted copy, next to a pending target.
-    part = (out / pending[0].target_relative_path).with_name("leftover.jpg.part")
+    # A leftover .part from the interrupted copy of a pending target.
+    target = out / pending[0].target_relative_path
+    part = target.with_name(target.name + ".part")
     part.parent.mkdir(parents=True, exist_ok=True)
     part.write_bytes(b"partial")
     with pipeline(inp, out) as p:
@@ -535,6 +538,19 @@ def test_an_uncopied_file_blocks_safe_to_delete(tmp_path):
     assert set(done.unaccounted) == copies | {sidecar, f"{ALBUM}/IMG_20040315_101010.jpg.json"}
     report = done.report_path.read_text(encoding="utf-8")
     assert job.source_relative_path in report.split("Not accounted for\n")[1]
+    # The duplicates count matches the report's list (the failed photo's copies are gone).
+    pairs = [
+        line
+        for line in report.split("Duplicates\n")[1].split("\n\n")[0].splitlines()
+        if line != "(none)"
+    ]
+    conn = db.connect(paths.cleanup_db_path(out))
+    try:
+        assert db.list_runs(conn)[0].counts["duplicates"] == len(pairs)
+    finally:
+        conn.close()
+    assert f"duplicates: {len(pairs)}" in report
+    assert not any("IMG_20040315_101010" in line for line in pairs)
     assert_unchanged(inp, before)
 
 
@@ -842,3 +858,172 @@ def test_a_later_run_dates_a_file_already_in_the_output(tmp_path):
         conn.close()
     assert_unchanged(first, before1)
     assert_unchanged(inp2, before2)
+
+
+# --- review fixes ------------------------------------------------------------------------------
+
+
+def test_run_duplicates_is_linear(tmp_path):
+    """20,000 origins, half of them copied: a quick query (it used to be quadratic)."""
+    conn = db.open_database(tmp_path / "out.db")
+    try:
+        run_id = db.create_run(conn, "/in", "in")
+        source = db.create_source(conn, "/in", "temp", "takeout")
+        n = 20_000
+        with db.transaction(conn):
+            ids = db.upsert_extra_files(
+                conn,
+                source.id,
+                (db.ExtraFileRecord(f"d/f{i:05d}.bin", i, 0, f"{i:032x}") for i in range(n)),
+            )
+            db.insert_origins(
+                conn,
+                run_id,
+                (db.OriginRecord(f"d/f{i:05d}.bin", extra_file_id=ids[i]) for i in range(n)),
+            )
+            db.insert_copies(
+                conn,
+                run_id,
+                (
+                    db.CopyRecord(f"d/f{i:05d}.bin", f"t/{i}.bin", extra_file_id=ids[i])
+                    for i in range(0, n, 2)
+                ),
+            )
+        started = time.perf_counter()
+        result = db.run_duplicates(conn, run_id, source.id)
+        elapsed = time.perf_counter() - started
+    finally:
+        conn.close()
+    assert len(result) == n // 2 and result[0] == ("d/f00001.bin", 1)
+    assert elapsed < 2, elapsed  # about 0.03 s on WSL
+
+
+def test_open_refuses_an_existing_photo_folder_and_writes_nothing(tmp_path, library):
+    from PIL import Image
+
+    inp = tmp_path / "takeout"
+    inp.mkdir()
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    Image.new("RGB", (8, 8), "red").save(photos / "a.jpg")
+    before = snapshot(photos)
+    for kw in ({}, {"library_root": library}):
+        with pytest.raises(CleanupError, match="isn't empty"), pipeline(inp, photos, **kw) as p:
+            p.open()
+    assert_unchanged(photos, before)
+    # The other folder rules, enforced by open() as well as by the wizard.
+    plain = tmp_path / "plain"
+    source = db.Source(1, "Plain", str(plain), "plain", False, "2026-01-01T00:00:00Z", None)
+    cases = [
+        (inp, inp / "out", {}),
+        (tmp_path / "outer" / "takeout", tmp_path / "outer", {}),
+        (inp, library / "out", {}),
+        (inp, plain, {"main_sources": [source]}),
+    ]
+    (tmp_path / "outer" / "takeout").mkdir(parents=True)
+    for i, o, kw in cases:
+        with pytest.raises(CleanupError), pipeline(i, o, **kw) as p:
+            p.open()
+        assert not paths.cleanup_dir(o).exists()
+
+
+def test_a_real_part_file_survives_cancel_and_resume(tmp_path):
+    inp = tmp_path / "plain"
+    inp.mkdir()
+    (inp / "clip.part").write_bytes(b"a real file that happens to end in .part")
+    for n in range(1, 6):
+        (inp / f"z{n}.txt").write_text(f"file {n}" * 50)
+    before = snapshot(inp)
+    out = tmp_path / "output"
+    with pipeline(inp, out) as p:
+        p.run_analysis()
+    event, progress = _cancel_when("Copying", 1)
+    with pipeline(inp, out, progress=progress, cancel_event=event, copy_threads=1) as p:
+        assert p.run_copy() is None
+        done = {j.target_relative_path for j in db.copy_jobs(p.conn, p.run_id, "done")}
+        pending = {j.target_relative_path for j in db.copy_jobs(p.conn, p.run_id, "pending")}
+    assert "Unknown date/clip.part" in done and "Unknown date/z5.txt" in pending
+    copied = out / "Unknown date" / "clip.part"
+    stamp = copied.stat().st_ino, copied.stat().st_ctime_ns
+    stale = out / "Unknown date" / "z5.txt.part"
+    stale.write_bytes(b"half")
+    with pipeline(inp, out) as p:
+        result = p.run_copy()
+    assert result.safe_to_delete
+    assert copied.read_bytes() == (inp / "clip.part").read_bytes()
+    assert (copied.stat().st_ino, copied.stat().st_ctime_ns) == stamp
+    assert not stale.exists()
+    assert_unchanged(inp, before)
+
+
+def test_failed_copies_are_retried_on_resume(tmp_path):
+    inp, _ = make_input(tmp_path / "fake")
+    before = snapshot(inp)
+    out = tmp_path / "output"
+    with pipeline(inp, out) as p:
+        p.run_analysis()
+        job = db.copy_jobs(p.conn, p.run_id)[0]
+    blocker = out / job.target_relative_path
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_bytes(b"in the way")  # stands in for a drive that dropped out
+    with pipeline(inp, out) as p:
+        assert p.copy()
+        assert db.copy_status_counts(p.conn, p.run_id)["error"] == 1
+    blocker.unlink()
+    with pipeline(inp, out) as p:
+        done = p.run_copy()
+    assert done.failed == () and done.safe_to_delete
+    assert hash_bytes(blocker.read_bytes()) == job.content_hash
+    assert_unchanged(inp, before)
+
+
+def test_unfinished_run_compares_paths_with_full_casefold():
+    def run(i: int, path: str, status: str) -> db.CleanupRun:
+        return db.CleanupRun(i, path, "x", "2026-01-01T00:00:00Z", None, status, {})
+
+    runs = [run(1, "/data/Ärger", "cancelled"), run(2, "/data/Ärger", "done")]
+    assert unfinished_run(runs, "/data/ärger").id == 1
+    assert unfinished_run(runs, "/data/ÄRGER").id == 1
+    assert unfinished_run(runs, "/data/Arger") is None
+
+
+def test_renames_are_stored_at_plan_time(run, out_conn):
+    stored = json.loads(db.get_setting(out_conn, "cleanup_renames:1"))
+    assert ["2004/05/a/b:c.jpg", "2004/05/a_b_c.jpg", "sanitized"] in stored
+    report = run["done"].report_path.read_text(encoding="utf-8")
+    assert "2004/05/a/b:c.jpg  ->  2004/05/a_b_c.jpg  (sanitized)" in report
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs POSIX permissions")
+def test_an_unreadable_other_file_is_reported(tmp_path):
+    inp = tmp_path / "plain"
+    inp.mkdir()
+    (inp / "ok.txt").write_text("fine")
+    locked = inp / "locked.txt"
+    locked.write_text("secret")
+    before = snapshot(inp)
+    locked.chmod(0)  # permissions only: size and mtime stay the same
+    try:
+        _, done = full_run(inp, tmp_path / "output")
+    finally:
+        locked.chmod(0o644)
+    assert not done.safe_to_delete and "locked.txt" in done.unaccounted
+    report = done.report_path.read_text(encoding="utf-8")
+    assert "locked.txt" in report.split("Unreadable files\n")[1].split("\n\n")[0]
+    assert_unchanged(inp, before)
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs POSIX permissions")
+def test_check_folders_reads_a_read_only_output_without_writing(tmp_path, main_conn, library):
+    inp, _ = make_input(tmp_path / "fake")
+    out = tmp_path / "output"
+    full_run(inp, out)
+    hidden = paths.cleanup_dir(out)
+    before = snapshot(hidden)
+    hidden.chmod(0o555)
+    try:
+        result = check_folders(main_conn, library, tmp_path / "fake", out)
+    finally:
+        hidden.chmod(0o755)
+    assert result.mode == "add", result.message
+    assert_unchanged(hidden, before)

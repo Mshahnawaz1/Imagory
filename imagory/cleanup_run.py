@@ -27,6 +27,7 @@ running the pipeline; all stage methods must be called from the thread that call
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import multiprocessing
 import os
@@ -160,64 +161,70 @@ def _storage_note(folder: Path) -> str:
     )
 
 
+def unfinished_run(runs: Iterable[db.CleanupRun], input_root: Path | str) -> db.CleanupRun | None:
+    """The latest unfinished run of ``input_root`` among ``runs``. Paths are compared with
+    :func:`_norm` (``normcase`` and full casefold), the one comparison used everywhere."""
+    target = _norm(input_root)
+    mine = [r for r in runs if r.status != "done" and _norm(r.input_path) == target]
+    return max(mine, key=lambda r: r.id, default=None)
+
+
 def _output_state(input_root: Path, output_root: Path) -> FolderCheck:
-    """``new``, ``add``, ``resume`` or ``refused`` from what is in the output folder."""
+    """``new``, ``add``, ``resume`` or ``refused`` from what is in the output folder. An
+    existing output database is opened with ``db.open_output_database`` (nothing written)."""
     if not output_root.exists():
         return FolderCheck("new", "New folder: a new cleanup will be created.")
     db_file = paths.cleanup_db_path(output_root)
     if db_file.is_file():
         try:
-            conn = db.connect_readonly(db_file)
-        except sqlite3.Error:
+            with db.open_output_database(db_file) as conn:
+                return _existing_output_state(conn, input_root)
+        except (db.OutputDatabaseError, sqlite3.Error):
             return FolderCheck("refused", "This folder holds a database that can't be read.")
-        try:
-            version = db.schema_version(conn)
-            if version > db.SCHEMA_VERSION:
-                return FolderCheck(
-                    "refused", "This cleanup was made by a newer Imagory. Please update Imagory."
-                )
-            if version < 5:  # cleanup tables arrived with migration 5
-                return FolderCheck("refused", "This folder is not an Imagory cleanup output.")
-            unfinished = [r for r in db.list_runs(conn) if r.status != "done"]
-            mine = [r for r in unfinished if _norm(r.input_path) == _norm(input_root)]
-            if mine:
-                counts = db.copy_status_counts(conn, mine[-1].id)
-                total = sum(counts.values())
-                done = f" ({counts['done']} of {total} files copied)" if total else ""
-                return FolderCheck(
-                    "resume", f"A cancelled cleanup of this Takeout folder will resume{done}."
-                )
-            if unfinished:
-                return FolderCheck(
-                    "refused",
-                    "This output has an unfinished cleanup of another folder "
-                    f"({unfinished[-1].input_path}). Choose that folder as the input to "
-                    "finish it first.",
-                )
-            files = sum(1 for _ in _cleaned_paths(conn))
-        except sqlite3.Error:
-            return FolderCheck("refused", "This folder holds a database that can't be read.")
-        finally:
-            conn.close()
-        return FolderCheck(
-            "add", f"Existing cleanup: {files} files. The new files will be added to it."
-        )
     try:
         entries = [e for e in os.listdir(output_root) if e.casefold() not in _IGNORABLE_NAMES]
+        if entries == [paths.CLEANUP_DIR_NAME] and paths.cleanup_dir(output_root).is_dir():
+            entries = [
+                e
+                for e in os.listdir(paths.cleanup_dir(output_root))
+                if e.casefold() not in _IGNORABLE_NAMES
+            ]
     except OSError:
         return FolderCheck("refused", "This folder can't be read.")
-    if entries == [paths.CLEANUP_DIR_NAME]:
-        entries = [
-            e
-            for e in os.listdir(paths.cleanup_dir(output_root))
-            if e.casefold() not in _IGNORABLE_NAMES
-        ]
     if entries:
         return FolderCheck(
             "refused",
             "This folder isn't empty. Choose an empty folder or an existing cleanup output.",
         )
     return FolderCheck("new", "Empty folder: a new cleanup will be created.")
+
+
+def _existing_output_state(conn: sqlite3.Connection, input_root: Path) -> FolderCheck:
+    version = db.schema_version(conn)
+    if version > db.SCHEMA_VERSION:
+        return FolderCheck(
+            "refused", "This cleanup was made by a newer Imagory. Please update Imagory."
+        )
+    if version < db.OUTPUT_MIN_VERSION:
+        return FolderCheck("refused", "This folder is not an Imagory cleanup output.")
+    runs = db.list_runs(conn)
+    mine = unfinished_run(runs, input_root)
+    if mine is not None:
+        counts = db.copy_status_counts(conn, mine.id)
+        total = sum(counts.values())
+        done = f" ({counts['done']} of {total} files copied)" if total else ""
+        message = f"A cancelled cleanup of this Takeout folder will resume{done}."
+        return FolderCheck("resume", message)
+    others = [r for r in runs if r.status != "done"]
+    if others:
+        return FolderCheck(
+            "refused",
+            "This output has an unfinished cleanup of another folder "
+            f"({others[-1].input_path}). Choose that folder as the input to finish it first.",
+        )
+    files = sum(1 for _ in _cleaned_paths(conn))
+    message = f"Existing cleanup: {files} files. The new files will be added to it."
+    return FolderCheck("add", message)
 
 
 def _cleaned_paths(conn: sqlite3.Connection) -> Iterable[str]:
@@ -245,6 +252,14 @@ def check_folders(
     Reads ``main_conn`` (sources only) and, read only, an existing output database. Nothing is
     written anywhere.
     """
+    return check_folders_for(db.list_sources(main_conn), library_root, input_root, output_root)
+
+
+def check_folders_for(
+    sources: Iterable[db.Source], library_root: Path, input_root: Path, output_root: Path
+) -> FolderCheck:
+    """:func:`check_folders` against a list of main-library sources. Needs no connection, so
+    the cleanup thread can run it on a snapshot taken on the main thread."""
     input_root, output_root = Path(input_root), Path(output_root)
     if not input_root.is_dir():
         return FolderCheck("refused", "The Takeout folder doesn't exist.")
@@ -260,7 +275,7 @@ def check_folders(
     if _contains(lib, inp) or _contains(lib, out):
         return FolderCheck("refused", "A folder is inside Imagory's own library folder.")
     cleaned_note = ""
-    for source in db.list_sources(main_conn):
+    for source in sources:
         if _norm(source.root_path) != out:
             continue
         if source.type != "cleaned":
@@ -269,8 +284,8 @@ def check_folders(
                 f"The output folder is already added as the source “{source.label}”.",
             )
         cleaned_note = (
-            f" It is the library source “{source.label}”, which is rescanned once this run "
-            "is added."
+            f" It is the library source “{source.label}”, which is rescanned once "
+            "this run is added."
         )
     state = _output_state(input_root, output_root)
     if state.mode == "refused":
@@ -386,69 +401,17 @@ def match_other_files(
 ) -> dict[str, str | None]:
     """Map non-image file names (videos, RAW, …) in one folder to their sidecar, or None.
 
-    ``takeout.match_directory`` only matches supported images, so this applies the same
-    name rules (plain and ``.supplemental-metadata`` forms, truncation, moved counters,
-    reused read only from :mod:`imagory.takeout`) to the other files. Sidecars in ``taken``
-    (already used by an image) are not offered. A sidecar goes to at most one file, best
-    pair first: readable title match, then exact before truncated names, then the
-    counter-moved reading, then by name. A truncated match whose title names another file is
-    rejected. A ``-edited`` copy with no sidecar of its own borrows its original's.
+    The same rules as for images (``takeout.match_directory`` with ``is_media``): plain and
+    ``.supplemental-metadata`` forms, truncation with title checks, moved counters, and
+    ``-edited`` copies borrowing their original's sidecar. Sidecars in ``taken`` (already
+    used by an image) are not offered.
     """
-    files = sorted(set(names), key=lambda n: (n.casefold(), n))
-    jsons = list(json_names)
+    files = set(names)
     taken_set = set(taken)
-    index = takeout._SidecarIndex(j for j in jsons if j not in taken_set)
-    titles: dict[str, str | None] = {}
-
-    def title_of(name: str) -> str | None:
-        if name not in titles:
-            title = None
-            if read_title is not None:
-                try:
-                    title = read_title(name)
-                except Exception:  # a bad sidecar must never stop matching
-                    log.warning("Cannot read title of %s", name, exc_info=True)
-            titles[name] = title.casefold() if isinstance(title, str) else None
-        return titles[name]
-
-    def ranked(
-        idx: takeout._SidecarIndex, name: str, readings: list[tuple[str, int]]
-    ) -> list[tuple[tuple, str, str]]:
-        wanted = {name.casefold(), *(base for base, _ in readings)}
-        pairs = []
-        for i, kind, rank in idx.candidates(readings):
-            side = idx.sidecars[i].name
-            title = title_of(side)
-            if title is None:
-                penalty = 1
-            elif title in wanted:
-                penalty = 0
-            elif kind == 1:
-                continue  # a truncated prefix of some other file
-            else:
-                penalty = 2
-            pairs.append(((penalty, kind, rank, name.casefold(), side), name, side))
-        return pairs
-
-    pairs = []
-    for name in files:
-        pairs += ranked(index, name, takeout._interpretations(name.casefold()))
-    pairs.sort()
-    result: dict[str, str | None] = dict.fromkeys(files)
-    claimed: set[str] = set()
-    for _key, name, side in pairs:
-        if result[name] is None and side not in claimed:
-            claimed.add(side)
-            result[name] = side
-
-    everything = takeout._SidecarIndex(jsons)
-    for name in files:
-        readings = takeout._edited_interpretations(name.casefold())
-        if result[name] is None and readings:
-            options = ranked(everything, name, readings)
-            if options:
-                result[name] = min(options)[2]
-    return result
+    offered = [j for j in json_names if j not in taken_set and j not in files]
+    return takeout.match_directory(
+        [*files, *offered], read_title, is_media=files.__contains__
+    ).matches
 
 
 def build_inventory(
@@ -573,6 +536,10 @@ class _Analysis:
 class CleanupPipeline:
     """One cleanup run of one input into one output folder.
 
+    ``main_sources`` is a snapshot of the main library's sources (``db.list_sources``, taken
+    on the main thread) so :meth:`open` can refuse an output that is a ``plain`` or
+    ``takeout`` source; ``library_root`` defaults to ``paths.library_dir()``.
+
     Typical use, on one worker thread::
 
         with CleanupPipeline(input_root, output_root, library_root=lib) as p:
@@ -600,10 +567,12 @@ class CleanupPipeline:
         cancel_event: threading.Event | None = None,
         tz: tzinfo | None = None,
         pool_threshold: int = DEFAULT_POOL_THRESHOLD,
+        main_sources: Sequence[db.Source] = (),
     ) -> None:
         self.input = Path(os.path.abspath(input_root))
         self.output = Path(os.path.abspath(output_root))
-        self.library_root = library_root
+        self.library_root = Path(library_root) if library_root else paths.library_dir()
+        self.main_sources = tuple(main_sources)
         self.workers = workers or default_workers()
         self.copy_threads = max(1, copy_threads)
         self._progress = progress or (lambda stage, done, total: None)
@@ -616,7 +585,6 @@ class CleanupPipeline:
         self._inventory: Inventory | None = None
         self._sidecars: dict[str, takeout.Sidecar | None] = {}
         self._album_names: dict[str, str] = {}
-        self._renames: tuple[Rename, ...] | None = None
 
     # -- lifecycle -----------------------------------------------------------------------------
 
@@ -648,23 +616,22 @@ class CleanupPipeline:
         if self._conn is not None:
             assert self.run_id is not None
             return self.run_id
-        if not self.input.is_dir():
-            raise CleanupError(f"The Takeout folder doesn't exist: {self.input}")
-        inp, out = _norm(self.input), _norm(self.output)
-        if _contains(inp, out) or _contains(out, inp):
-            raise CleanupError("The input and output folders must not contain each other.")
+        # The safety boundary: every folder rule is enforced again here, before anything is
+        # created (nesting, library folder, main-library sources, a non-empty folder that is not
+        # a cleanup output, an unfinished run of another input).
+        check = check_folders_for(self.main_sources, self.library_root, self.input, self.output)
+        if check.mode == "refused":
+            raise CleanupError(check.message)
         self._progress("Opening the output folder", 0, 0)
         # Everything created here is under the output folder.
         paths.cleanup_dir(self.output).mkdir(parents=True, exist_ok=True)
         conn = db.open_database(paths.cleanup_db_path(self.output))
         self._conn = conn
         try:
-            unfinished = [r for r in db.list_runs(conn) if r.status != "done"]
-            others = [r for r in unfinished if _norm(r.input_path) != inp]
-            run = db.resumable_run(conn, str(self.input))
-            if run is not None and _norm(run.input_path) != inp:
-                run = None
-            if run is None and others:
+            runs = db.list_runs(conn)
+            run = unfinished_run(runs, self.input)
+            others = [r for r in runs if r.status != "done" and r is not run]
+            if others:  # checked above too; the database is the final word
                 raise CleanupError(
                     f"This output has an unfinished cleanup of {others[-1].input_path}."
                 )
@@ -1091,12 +1058,12 @@ class CleanupPipeline:
                 )  # fmt: skip
         return cands, info
 
-    def _build_plan(self, exclude: Iterable[str] = ()) -> tuple[Plan, list[Candidate], dict]:
+    def _build_plan(self) -> tuple[Plan, list[Candidate], dict]:
         inv = self.inventory()
         if not inv.complete:
             raise CleanupError("cancelled")
         cands, info = self._candidates(inv)
-        existing = self._existing_output_paths(exclude)
+        existing = self._existing_output_paths()
         plan = cleanup.build_plan(cands, existing, len(str(self.output)))
         return plan, cands, info
 
@@ -1152,6 +1119,7 @@ class CleanupPipeline:
             db.insert_origins(self.conn, run_id, origins)
             db.insert_copies(self.conn, run_id, copies)
             db.set_run_status(self.conn, run_id, "planned")
+            db.set_setting(self.conn, _renames_key(run_id), _renames_json(plan.renames))
             db.set_run_counts(
                 self.conn,
                 run_id,
@@ -1162,7 +1130,6 @@ class CleanupPipeline:
                     "trash_skipped": len(self.inventory().trash),
                 },
             )
-        self._renames = plan.renames
         log.info(
             "Cleanup run %d planned: %d copies, %d origins, %d renames",
             run_id,
@@ -1285,6 +1252,10 @@ class CleanupPipeline:
                 if not cleanup_copy.already_done(dest, job.size, mtime_of(job)):
                     log.info("Copying %s again: the copy changed", job.target_relative_path)
                     db.reset_copy(self.conn, job.id)
+            # A failure may have been transient (a drive unplugged): try every error again.
+            for job in db.copy_jobs(self.conn, run_id, "error"):
+                log.info("Retrying %s (%s)", job.source_relative_path, job.error)
+                db.reset_copy(self.conn, job.id)
         jobs = db.copy_jobs(self.conn, run_id)
         pending = [j for j in jobs if j.status == "pending"]
         done_bytes = sum(j.size for j in jobs if j.status == "done")
@@ -1367,18 +1338,24 @@ class CleanupPipeline:
             return CopyResult(False, None, None, f"{type(exc).__name__}: {exc}")
 
     def _remove_stale_parts(self, jobs: Iterable[db.CopyJob]) -> None:
-        """Delete leftover ``*.part`` files (from a cancelled copy) in the target folders.
-        Only folders under the output are visited."""
-        folders: set[Path] = set()
+        """Delete ``<target>.part`` (left by a cancelled copy) for each of this run's pending
+        targets, and nothing else: any other ``*.part`` file, even in the same folder, may be
+        a real copied file. Each path comes from :meth:`_output_file`, so it is under the
+        output folder."""
+        removed = 0
         for job in jobs:
             try:
-                folders.add(self._output_file(job.target_relative_path).parent)
+                dest = self._output_file(job.target_relative_path)
             except CleanupError:
                 continue
-        removed = 0
-        for folder in sorted(folders):
-            if folder.is_dir() and _contains(_norm(self.output), _norm(folder)):
-                removed += cleanup_copy.remove_stale_parts(folder)
+            part = dest.with_name(dest.name + cleanup_copy.PART_SUFFIX)
+            try:
+                if part.is_symlink() or not part.is_file():
+                    continue
+                part.unlink()  # under the output: <output>/<target>.part
+                removed += 1
+            except OSError as exc:
+                log.warning("Cannot remove %s: %s", part, exc)
         if removed:
             log.info("Removed %d leftover .part files", removed)
 
@@ -1402,12 +1379,11 @@ class CleanupPipeline:
         if not inv.complete:
             raise CleanupError("cancelled")
         analysis = self._analysis(inv, self._photo_rows(temp.id))
-        renames = self._renames
-        if renames is None:  # a new process: replan against the output as it was
-            mine = [j.target_relative_path for j in db.copy_jobs(self.conn, run_id)]
-            plan = self._build_plan(exclude=mine)[0]
-            targets = {t.casefold() for t in mine}
-            renames = tuple(r for r in plan.renames if r.target.casefold() in targets)
+        renames = _renames_from(db.get_setting(self.conn, _renames_key(run_id)))
+        # Extra files that could not be read have no hash, so they were not copied (item 11).
+        unhashed = tuple(
+            e.relative_path for e in db.list_extra_files(self.conn, temp.id) if not e.content_hash
+        )
 
         copied: dict[int, tuple[int, int]] = {}
         jobs = db.copy_jobs(self.conn, run_id)
@@ -1423,7 +1399,6 @@ class CleanupPipeline:
         jobs = db.copy_jobs(self.conn, run_id)
         failed = tuple(f"{j.source_relative_path}: {j.error}" for j in jobs if j.status == "error")
         done = [j for j in jobs if j.status == "done"]
-        duplicates = self._duplicates(run_id, temp.id)
         counts = {
             "photos": sum(1 for j in done if j.file_id is not None),
             "other_files": sum(
@@ -1431,28 +1406,34 @@ class CleanupPipeline:
                 for j in done
                 if j.file_id is None and not j.target_relative_path.startswith(_JSON_PREFIX)
             ),
-            "duplicates": len(duplicates),
             "trash_skipped": len(inv.trash),
             "errors": len(failed),
             "bytes_copied": sum(copied[j.id][0] for j in done),
         }
         db.finalise_run(self.conn, run_id, temp.id, cleaned.id, copied, counts)
+        # The duplicates are counted from the same rows as the report's list, after finalise
+        # dropped the origins of failed copies.
+        pairs = self._duplicate_pairs(cleaned.id)
+        with db.transaction(self.conn):
+            db.set_run_counts(self.conn, run_id, {"duplicates": len(pairs)})
+        counts["duplicates"] = len(pairs)
         log.info("Cleanup run %d finalised: %s", run_id, counts)
 
         unaccounted = self._unaccounted(inv)
+        unreadable = tuple(sorted({*analysis.unreadable, *unhashed}))
         report_counts = {
             **counts,
             "json_files": sum(1 for j in done if j.target_relative_path.startswith(_JSON_PREFIX)),
-            "unreadable": len(analysis.unreadable),
+            "unreadable": len(unreadable),
             "unmatched_sidecars": len(analysis.unmatched_sidecars),
             "unaccounted": len(unaccounted),
         }
         report = CleanupReport(
             counts=report_counts,
             trash_skipped=analysis.trash,
-            duplicates=self._duplicate_pairs(cleaned.id),
+            duplicates=pairs,
             unmatched_sidecars=analysis.unmatched_sidecars,
-            unreadable=analysis.unreadable,
+            unreadable=unreadable,
             renames=renames,
             unaccounted=unaccounted,
         )
@@ -1490,8 +1471,10 @@ class CleanupPipeline:
         copied = {j.source_relative_path for j in db.copy_jobs(self.conn, self._run())}
         pairs = []
         for o in db.list_origins(self.conn, self._run()):
-            if o.original_relative_path in copied:
-                continue
+            if o.original_relative_path in copied or o.original_relative_path.casefold().endswith(
+                takeout.SIDECAR_SUFFIX
+            ):
+                continue  # copied itself, or a JSON file an earlier run already copied
             kept = files.get(o.file_id) if o.file_id is not None else extras.get(o.extra_file_id)
             if kept is not None:
                 pairs.append((kept, o.original_relative_path))
@@ -1564,6 +1547,24 @@ class CleanupPipeline:
         if not self.copy():
             return None
         return self.finalise(input_is_source)
+
+
+def _renames_key(run_id: int) -> str:
+    return f"cleanup_renames:{run_id}"
+
+
+def _renames_json(renames: Iterable[Rename]) -> str:
+    return json.dumps([[r.original, r.target, r.reason] for r in renames], ensure_ascii=False)
+
+
+def _renames_from(text: str | None) -> tuple[Rename, ...]:
+    if not text:
+        return ()
+    try:
+        return tuple(Rename(o, t, reason) for o, t, reason in json.loads(text))
+    except (ValueError, TypeError):
+        log.warning("Stored renames can't be read; the report lists none")
+        return ()
 
 
 def _with_margin(total: int) -> int:
