@@ -97,6 +97,8 @@ def build_run(out: Path, items: list[Item], *, input_path: str = "/in/Takeout") 
                 kept_id, kind = in_output[content_hash]
                 kind_extra = kind == "extra"
                 new_copy = False
+                if not kind_extra and item.people:
+                    db.set_photo_takeout_metadata(conn, kept_id, item.people, None, False, None)
             elif kind_extra:
                 (kept_id,) = db.upsert_extra_files(
                     conn,
@@ -500,6 +502,14 @@ def test_import_run_albums_clash_rule(output, lib):
     with pytest.raises(ValueError):  # members come from the scanned file rows
         sources.import_run_albums(conn, output_db, None, source.id)
     scan(conn, root, source)
+    cancelled = db.start_scan_run(conn, source.id, db.utc_now())
+    db.finish_scan_run(conn, cancelled, source.id, "cancelled", db.ScanCounts())
+    settings_before = conn.execute("SELECT * FROM settings ORDER BY key").fetchall()
+    with pytest.raises(ValueError, match="did not complete"):
+        sources.import_run_albums(conn, output_db, None, source.id)
+    assert conn.execute("SELECT * FROM settings ORDER BY key").fetchall() == settings_before
+    assert db.list_albums(conn) == []
+    scan(conn, root, db.get_source(conn, source.id))
 
     # Existing albums, one already using the first suffix; neither may change.
     own = conn.execute("SELECT id FROM photos ORDER BY id LIMIT 1").fetchone()[0]
@@ -586,7 +596,8 @@ def test_swap_keeps_photo_ids_dates_people_and_albums(lib, tmp_path):
     db.add_photos_to_album(conn, favourites, [ids["IMG_1.jpg"][1], ids["IMG_2.jpg"][1]])
 
     out = tmp_path / "Cleaned"
-    build_run(
+    out_db = paths.cleanup_db_path(out)
+    run1 = build_run(
         out,
         [
             Item(
@@ -608,18 +619,42 @@ def test_swap_keeps_photo_ids_dates_people_and_albums(lib, tmp_path):
         ],
         input_path=str(takeout_dir),
     )
-    output_before = snapshot(out)
     cleaned = sources.add_cleaned_source(conn, out)
+    thumbs_root = paths.thumbs_dir(root)
     with pytest.raises(ValueError):  # not scanned yet
-        sources.swap_source(conn, paths.thumbs_dir(root), old.id, cleaned.id)
-    assert not sources.swap_ready(conn, cleaned.id)
+        sources.swap_source(conn, thumbs_root, old.id, cleaned.id, out_db, run1)
+    assert not sources.swap_ready(conn, cleaned.id, out_db, run1)
     scan(conn, root, cleaned)
-    assert sources.swap_ready(conn, cleaned.id)
+    assert sources.swap_ready(conn, cleaned.id, out_db, run1)
+    assert not sources.swap_ready(conn, cleaned.id, out_db, run1 + 5)  # no such run
+
+    # A later run finalised after that scan: the swap waits for a rescan.
+    make_image(year / "IMG_3.jpg", color=(8, 8, 8))
+    run2 = build_run(
+        out,
+        [
+            Item(
+                "2019/07/IMG_3.jpg",
+                ("Google Photos/Photos from 2019/IMG_3.jpg",),
+                data=(year / "IMG_3.jpg").read_bytes(),
+            )
+        ],
+        input_path=str(takeout_dir),
+    )
+    input_before = snapshot(takeout_dir)
+    scan(conn, root, db.get_source(conn, old.id))
+    assert not sources.swap_ready(conn, cleaned.id, out_db, run2)
+    with pytest.raises(ValueError):
+        sources.swap_source(conn, thumbs_root, old.id, cleaned.id, out_db, run2)
+    assert db.get_source(conn, old.id) is not None
+    output_before = snapshot(out)
+    scan(conn, root, db.get_source(conn, cleaned.id))
+    assert sources.swap_ready(conn, cleaned.id, out_db, run2)
     assert sources.swap_orphan_count(conn, old.id) == 0  # Trash was never imported
     with pytest.raises(ValueError):
-        sources.swap_source(conn, paths.thumbs_dir(root), cleaned.id, cleaned.id)
+        sources.swap_source(conn, thumbs_root, cleaned.id, cleaned.id, out_db, run2)
 
-    sources.swap_source(conn, paths.thumbs_dir(root), old.id, cleaned.id)
+    sources.swap_source(conn, thumbs_root, old.id, cleaned.id, out_db, run2)
     assert db.get_source(conn, old.id) is None
     for name, before_row in ids.items():
         after_row = file_row(conn, cleaned.id, f"2019/07/{name}")
@@ -639,12 +674,20 @@ def test_swap_refuses_a_cancelled_scan(output, lib, tmp_path):
     make_image(old_dir / "a.jpg")
     old = db.create_source(conn, str(old_dir), "Old", "takeout")
     cleaned = sources.add_cleaned_source(conn, output)
-    run_id = db.start_scan_run(conn, cleaned.id, db.utc_now())
-    db.finish_scan_run(conn, run_id, cleaned.id, "cancelled", db.ScanCounts())
-    assert not sources.swap_ready(conn, cleaned.id)
+    out_db = paths.cleanup_db_path(output)
+    scan_id = db.start_scan_run(conn, cleaned.id, db.utc_now())
+    db.finish_scan_run(conn, scan_id, cleaned.id, "cancelled", db.ScanCounts())
+    assert not sources.swap_ready(conn, cleaned.id, out_db, 1)
     with pytest.raises(ValueError):
-        sources.swap_source(conn, paths.thumbs_dir(root), old.id, cleaned.id)
+        sources.swap_source(conn, paths.thumbs_dir(root), old.id, cleaned.id, out_db, 1)
     assert db.get_source(conn, old.id) is not None
+    # An unfinished cleanup run is never ready either.
+    writer = db.connect(out_db)
+    pending = db.create_run(writer, "/in/x", "x")
+    writer.close()
+    scan(conn, root, cleaned)
+    assert sources.swap_ready(conn, cleaned.id, out_db, 1)
+    assert not sources.swap_ready(conn, cleaned.id, out_db, pending)
 
 
 # --- dialogs -----------------------------------------------------------------------------
@@ -688,3 +731,148 @@ def test_dialogs_show_cleaned_type_without_change_type(qtbot, output, lib, monke
     dialog.table.selectRow(rows["Plain"])
     assert not dialog.type_button.isHidden()
     window.close()
+
+
+def test_album_names_are_normalised_before_the_clash_rule(lib, tmp_path):
+    root, conn = lib
+    out = tmp_path / "Cleaned"
+    items = []
+    names = {
+        "a": "\u00a0Trip",  # NBSP
+        "b": "Trip\t",  # tab
+        "c": " \t ",  # whitespace only (spaces alone never leave the output database)
+        "d": "Bad",  # made to fail below
+        "e": "Fine",
+    }
+    for i, (key, album) in enumerate(names.items()):
+        items.append(
+            Item(
+                f"2019/07/{key}.jpg",
+                (f"Google Photos/{key}/{key}.jpg",),
+                color=(i, 99, 99),
+                albums={f"Google Photos/{key}/{key}.jpg": album},
+            )
+        )
+    run = build_run(out, items)
+    source = sources.add_cleaned_source(conn, out)
+    scan(conn, root, source)
+    db.create_album(conn, "trip")
+    conn.execute(
+        "CREATE TEMP TRIGGER no_bad BEFORE INSERT ON albums WHEN NEW.name = 'Bad' "
+        "BEGIN SELECT RAISE(ABORT, 'refused'); END"
+    )
+    imported = sources.import_run_albums(conn, paths.cleanup_db_path(out), run, source.id)
+    by_name = {a.name: a for a in imported}
+    # NBSP and tab are trimmed, so both are "Trip", one album, clashing with "trip".
+    assert set(by_name) == {"Trip (Takeout)", "Untitled", "Fine"}
+    assert by_name["Trip (Takeout)"].photos == 2
+    assert by_name["Untitled"].photos == 1
+    # "Bad" failed alone; the others exist and the run is still recorded as imported.
+    assert {a.name for a in db.list_albums(conn)} == {"trip", "Trip (Takeout)", "Untitled", "Fine"}
+    assert sources.import_run_albums(conn, paths.cleanup_db_path(out), run, source.id) == []
+
+
+def test_photo_ids_at_paths_chunks_and_keeps_order(lib):
+    _, conn = lib
+    source = db.create_source(conn, "/x", "X", "plain")
+    now = db.utc_now()
+    ids = {}
+    for i in range(3):
+        rec = db.FileRecord(f"A/p{i}.jpg", 1, 1, 1, 1, "JPEG", LOCAL, "exif", content_hash=f"h{i}")
+        file_id = db.insert_file(conn, source.id, rec, now)
+        ids[i] = conn.execute("SELECT photo_id FROM files WHERE id = ?", (file_id,)).fetchone()[0]
+    wanted = [f"none/{n}.jpg" for n in range(1200)]
+    wanted[700:700] = ["a/P2.JPG", "A/p0.jpg"]  # case-insensitive, across chunks
+    wanted.append("A/p0.jpg")  # repeated
+    assert db.photo_ids_at_paths(conn, source.id, wanted) == [ids[2], ids[0]]
+    assert db.photo_ids_at_paths(conn, source.id, []) == []
+
+
+def test_sqlite_file_uri():
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    uri = db.sqlite_file_uri
+    assert uri(PureWindowsPath(r"C:\Users\Ana\My Photos\.imagory\imagory.db")) == (
+        "file:///C:/Users/Ana/My%20Photos/.imagory/imagory.db"
+    )
+    assert uri(PureWindowsPath(r"\\nas\share\Fotos #1\imagory.db"), "mode=ro") == (
+        "file:////nas/share/Fotos%20%231/imagory.db?mode=ro"
+    )
+    assert uri(PureWindowsPath(r"D:\100%\why?\été.db")) == (
+        "file:///D:/100%25/why%3F/%C3%A9t%C3%A9.db"
+    )
+    assert uri(PurePosixPath("/home/ana/a b#?%/x.db"), "mode=ro&immutable=1") == (
+        "file:///home/ana/a%20b%23%3F%25/x.db?mode=ro&immutable=1"
+    )
+
+
+def test_output_folder_with_odd_characters_opens(lib, tmp_path):
+    root, conn = lib
+    out = tmp_path / "Fotos #1 100% why?"
+    build_run(out, standard_items())
+    before = snapshot(out)
+    source = sources.add_cleaned_source(conn, out)
+    scan(conn, root, source)
+    assert file_row(conn, source.id, "2019/07/IMG_1.jpg")[4] == "takeout_json"
+    assert_unchanged(out, before)
+    no_side_files(out)
+
+
+def test_rescan_after_a_later_run_refreshes_unchanged_files(output, lib):
+    root, conn = lib
+    out_db = paths.cleanup_db_path(output)
+    source = sources.add_cleaned_source(conn, output)
+    scan(conn, root, source)
+    img1 = file_row(conn, source.id, "2019/07/IMG_1.jpg")
+    assert db.people_for_photo(conn, img1[1]) == ["Ana", "Ben"]
+
+    # Run 2 knows more about two files already in the output: a new person for IMG_1 and
+    # (as a later run's sidecar would give) a real date for the undated scan.
+    build_run(
+        output,
+        [
+            Item(
+                "",
+                ("Account 2/IMG_1.jpg",),
+                data=(output / "2019" / "07" / "IMG_1.jpg").read_bytes(),
+                people=("Dana",),
+            )
+        ],
+        input_path="/in/Account 2",
+    )
+    writer = db.connect(out_db)
+    writer.execute(
+        "UPDATE photos SET taken_at_local = '2020-02-02T02:02:02', date_source = 'takeout_json' "
+        "WHERE id = (SELECT photo_id FROM files WHERE relative_path = 'Unknown date/scan.jpg')"
+    )
+    writer.close()
+    no_side_files(output)
+
+    # A cancelled scan changes nothing and leaves the marker as it was.
+    cancelled = Scanner(conn, db.get_source(conn, source.id), paths.thumbs_dir(root), root)
+    cancelled.cancel()
+    assert cancelled.run().status == "cancelled"
+    assert db.people_for_photo(conn, img1[1]) == ["Ana", "Ben"]
+
+    before = snapshot(output)
+    summary = scan(conn, root, db.get_source(conn, source.id))
+    assert (summary.counts.added, summary.counts.updated, summary.counts.unchanged) == (0, 0, 3)
+    assert_unchanged(output, before)
+    no_side_files(output)
+    assert db.people_for_photo(conn, img1[1]) == ["Ana", "Ben", "Dana"]
+    undated = file_row(conn, source.id, "Unknown date/scan.jpg")
+    assert (undated[2], undated[4], undated[5]) == (
+        "2020-02-02T02:02:02",
+        "takeout_json",
+        "2020-02-02T02:02:02",
+    )
+
+    # No new run: a rescan doesn't overwrite what the library holds.
+    writer = db.connect(out_db)
+    writer.execute(
+        "UPDATE photos SET taken_at_local = '2021-01-01T00:00:00' "
+        "WHERE id = (SELECT photo_id FROM files WHERE relative_path = 'Unknown date/scan.jpg')"
+    )
+    writer.close()
+    scan(conn, root, db.get_source(conn, source.id))
+    assert file_row(conn, source.id, "Unknown date/scan.jpg")[2] == "2020-02-02T02:02:02"
