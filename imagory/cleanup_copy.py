@@ -6,6 +6,8 @@ Filesystem only: no SQL, no Qt. Safety rules:
   written, renamed or deleted.
 * Every write, ``os.replace`` and delete targets ``dest``, ``<dest>.part`` or a
   ``*.part`` file in the folder given to :func:`remove_stale_parts`.
+* An existing ``dest`` is never overwritten: identical content is accepted as done,
+  anything else is refused.
 * Ordinary I/O failures (and cancel) never raise: the ``.part`` is removed and
   ``CopyResult(ok=False, ...)`` is returned.
 
@@ -60,6 +62,14 @@ def copy_verified(
     src, dest = Path(src), Path(dest)
     part = dest.with_name(dest.name + PART_SUFFIX)
     try:
+        existing = _existing_dest(dest, expected_hash, cancel)
+    except _Cancelled:
+        return _fail("cancelled")
+    except OSError as exc:
+        return _fail(f"{type(exc).__name__}: {exc.strerror or exc}")
+    if existing is not None:
+        return existing
+    try:
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             hasher = _new_hasher()
@@ -102,6 +112,32 @@ def copy_verified(
         return _fail(str(exc))
     except OSError as exc:
         return _fail(f"{type(exc).__name__}: {exc.strerror or exc}")
+
+
+def _existing_dest(
+    dest: Path, expected_hash: str, cancel: Callable[[], bool] | None
+) -> CopyResult | None:
+    """Never overwrite a file already in the output (an earlier run's copy may be the only one).
+
+    Returns None when ``dest`` doesn't exist. When it holds the expected content (a copy whose
+    ``done`` mark was lost), it is accepted as is, with its own size and mtime. Anything else
+    at ``dest`` is refused.
+    """
+    try:
+        st = os.stat(dest, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return _fail("destination exists and is not a regular file")
+    hasher = _new_hasher()
+    with open(dest, "rb") as f:
+        while chunk := f.read(CHUNK_SIZE):
+            if cancel is not None and cancel():
+                raise _Cancelled
+            hasher.update(chunk)
+    if hasher.hexdigest() != expected_hash:
+        return _fail("destination exists with different content")
+    return CopyResult(ok=True, size=st.st_size, mtime_ns=st.st_mtime_ns, error=None)
 
 
 def _discard_part(part: Path) -> None:

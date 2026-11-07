@@ -180,3 +180,29 @@ def test_remove_stale_parts_only_part_files(src_dir, out):
     assert (out / "dir.part" / "inner.txt").exists()
     assert (out / "link.part").is_symlink()
     assert_unchanged(src_dir, before)
+
+
+def test_existing_dest_with_other_content_is_never_overwritten(src_dir, out):
+    before = snapshot(src_dir)
+    data = (src_dir / "a.jpg").read_bytes()
+    dest = out / "a.jpg"
+    dest.write_bytes(b"an earlier run's copy")
+    os.utime(dest, ns=(1_400_000_000_000_000_000,) * 2)
+    out_before = snapshot(out)
+    r = copy_verified(src_dir / "a.jpg", dest, hash_bytes(data), 1_500_000_000_000_000_000)
+    assert not r.ok and "different content" in r.error
+    assert_unchanged(out, out_before)
+    assert_unchanged(src_dir, before)
+
+
+def test_existing_dest_with_same_content_is_accepted(src_dir, out):
+    before = snapshot(src_dir)
+    data = (src_dir / "a.jpg").read_bytes()
+    dest = out / "a.jpg"
+    dest.write_bytes(data)
+    os.utime(dest, ns=(1_400_000_000_000_000_000,) * 2)
+    out_before = snapshot(out)
+    r = copy_verified(src_dir / "a.jpg", dest, hash_bytes(data), 1_500_000_000_000_000_000)
+    assert r.ok and r.size == len(data) and r.mtime_ns == 1_400_000_000_000_000_000
+    assert_unchanged(out, out_before)
+    assert_unchanged(src_dir, before)
