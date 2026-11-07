@@ -19,22 +19,22 @@ Imagory is a free, open source, fully offline Windows application that helps non
 
 **Principles**
 
-1. **Read-only on originals.** The app only reads photo files and stores their paths. It never moves, edits, renames, or deletes them, and never writes app data into photo folders.
+1. **Read-only on originals.** The app only reads photo files and stores their paths. It never moves, edits, renames, or deletes them, and never writes app data into photo folders. One exception: a folder that Imagory itself created as a Takeout cleanup output (section 8.10) holds Imagory's copies and a `.imagory/` folder (database, thumbnails, `metadata.json`, reports). The cleanup's input is read-only like every other source.
 2. **Fully offline.** No telemetry, accounts, update checks, or network calls in V0 and V1.
 3. **Disposable cache, durable library.** Thumbnails can be deleted and regenerated at any time. The database is the source of truth for Imagory's own data (sources, albums, dates).
 4. **Hide, never destroy.** Duplicates are hidden from view, not deleted. The database is never purged automatically; removal of database rows only happens through an explicit, confirmed user action.
 
 **Non-goals (V0 and V1)**
 
-- Deleting or moving files on disk, including duplicate removal.
+- Deleting or moving files on disk, including duplicate removal. Takeout cleanup (section 8.10) writes deduplicated **copies** to a folder the user picks; it never deletes or moves the originals, and deleting the Takeout afterwards is left to the user.
 - Face detection and recognition (planned for V2). Reading the person names that Google already stored in Takeout sidecars is not face recognition and is in scope (section 8.9).
-- RAW and video support.
+- RAW and video support. Takeout cleanup copies RAW files and videos as-is so nothing is lost, but they are not shown in the grid.
 - Cloud sync, mobile apps, multi-user, accounts.
 - Photo editing.
 - Near-duplicate (visually similar) detection.
 - Map view.
 - Portable mode (data stored next to the .exe).
-- Importing Takeout albums as Imagory albums.
+- Importing Takeout albums as Imagory albums, except through Takeout cleanup (section 8.10), where album folders and Archive become albums.
 
 ## 4. Platform and technology
 
@@ -60,6 +60,7 @@ Imagory is a free, open source, fully offline Windows application that helps non
 | **V0** | Pick a directory, scan it, preview images, store image data in SQLite | Confirmed |
 | **V1** | Multiple sources, Takeout folder import, exact duplicate detection, month-grouped thumbnail grid, photo viewer, search and filters, manual albums | Confirmed |
 | **V1.x** | Zipped folder build published alongside the single .exe | Confirmed, timing flexible |
+| **V1.x** | Takeout cleanup: a deduplicated, metadata-preserving copy of an extracted Takeout (section 8.10) | Confirmed, planned |
 | **V1.x** | Editable people: rename, merge, add or remove photos, delete (section 14) | Proposed, **needs planning** |
 | **V1.5** | Takeout import from .zip files, including multi-part exports | Confirmed as after V1 |
 | **V2** | Face detection and recognition as a separate downloadable extension | Proposed, details not confirmed |
@@ -207,6 +208,7 @@ Each file gets one best date and a `date_source` recording where it came from (`
 
 - Takeout sources: Takeout JSON, then EXIF, then filename, then file modified time.
 - Plain folders: EXIF, then filename, then file modified time.
+- Takeout cleanup (section 8.10) and `cleaned` sources: Takeout JSON, then EXIF, then filename. **The file modified time is never used**, because in a Takeout it is the time the zip was extracted. A file with none of the three stays undated (`taken_at_local`, `taken_at_utc` and `date_source` are NULL) and appears under "Unknown date". Videos use the sidecar date, then the filename date; dates inside video containers are not read.
 
 **Time zones.** Takeout JSON gives an exact UTC moment, while EXIF gives local wall-clock time with no offset. Sorting mixed sources needs one consistent value, so:
 
@@ -261,12 +263,30 @@ Google Photos stores the names you tagged in a photo in its Takeout sidecar (`pe
 - **Out of scope:** renaming, merging, or deleting people, adding or removing a person's photos by hand (planned for V1.x, section 14), a Favourites filter, and anything face-based (V2).
 - **Privacy:** names are personal data stored only in the local database. Nothing is sent anywhere.
 
+### 8.10 Takeout cleanup
+
+Make a clean copy of an extracted Google Takeout folder: one file per unique photo, no JSON sidecars, a `YYYY/MM` layout, and a database plus a `metadata.json` that keep all the Takeout metadata. Afterwards the user can delete the original Takeout by hand and lose nothing. The full plan, with every rule and the pipeline, is `docs/takeout-cleanup-plan.md`; this section is the agreed summary.
+
+- **Originals:** opened read-only, never modified, moved, renamed or deleted (principle 1). Tests assert the input is unchanged.
+- **Entry point:** a **Clean up Takeout…** toolbar button next to Add source and in the File menu. It opens a non-modal six-page wizard: input, output, analyse, preview, copy, done. Disabled during scans; scans, source and album actions are disabled during a cleanup.
+- **Input and output:** one extracted Takeout folder per run (zips stay V1.5). The output is an empty folder, or an existing cleanup output to merge a later run into (for example a second account); a cancelled run resumes when the same input is picked again. Output and input must not contain each other or sit in the library folder, and an output that is already a `plain` or `takeout` source is refused. A cloud or network folder gets a warning, because the output holds SQLite.
+- **Duplicates:** one copy per content hash (section 8.5). A file already in the output wins, then a year folder, then a non-album folder, then the shortest path, then path order. Every other copy is recorded as an origin of the kept file.
+- **What is copied:** photos, videos, RAW and every other file except used sidecars and Trash. Images the scanner can't decode are copied as-is and listed. JSON files that aren't used sidecars go to `.imagory/takeout-json/<original path>`. A same-stem companion with no sidecar (live or motion photo pair) follows its photo's folder and name.
+- **Layout and names:** `<output>/YYYY/MM/<name>` by best date (section 8.4 cleanup rule), or `<output>/Unknown date/`. The name is the sidecar title (the original name before Takeout truncated it) with the file's real extension, `-edited` copies keep their suffix, and the on-disk name is used without a sidecar. Names are sanitized for Windows, clashes get ` (1)`, ` (2)` (compared with casefold), and paths over 250 characters have their stem shortened. Every rename is in the report.
+- **Copy safety:** each file is written to `<name>.part` while the source is hashed (it must match the analysis), then the `.part` is re-read and hashed, renamed into place, and its modified time set to the taken time (files with no date keep their original mtime). Free space (bytes plus about 5%) is checked before copying.
+- **Output folder:** `<output>/.imagory/` holds `imagory.db` (the normal schema), `thumbs/`, `metadata.json` (a plain-text copy of all metadata, rewritten at the end of each run), `takeout-json/` and `reports/cleanup-<UTC timestamp>.txt`. Paths are relative to the output root, so the folder can be moved or renamed.
+- **"Safe to delete":** shown only when every file in the input except Trash is accounted for (a verified copy, a duplicate of one, a stored sidecar, or a copied JSON file). Otherwise the unaccounted files are listed.
+- **Albums:** each Takeout album folder (named by its album JSON title when present) and Archive becomes an album in the output database. Membership comes from every copy, including duplicates not copied. Both originals and `-edited` copies are kept.
+- **Add to library:** the output becomes a source of type `cleaned` in the main library. A `cleaned` scan reads dates, people, caption, favourite, upload time and location from the output database (matched by path, confirmed by hash), keeps undated files undated, and falls back to the plain rules for files not in it. **Add source** detects a folder holding `.imagory/imagory.db` as `cleaned`; "Change type…" is not offered for it. The run's albums are created once; a name clash creates `<name> (Takeout)`, then `<name> (Takeout 2)`, and existing albums are never changed. If the input is already a source, the user is offered (with confirmation) to remove it after the cleaned source is scanned; photos keep their ids, albums and people because identity is the hash.
+- **Threads:** a `CleanupThread` is the only writer of the output database; worker processes hash, read metadata and make thumbnails (section 6.2). The main library database is untouched until Add to library.
+- **Out of scope:** deleting or moving originals, zips, writing EXIF or XMP into copies, near-duplicates, opening the output as its own library, rebuilding a database from `metadata.json`, and writing later main-library edits back to the output database.
+
 ## 9. Data model (SQLite)
 
 The exact columns are finalized during implementation. The structure below is agreed.
 
 ```
-sources      id, label, root_path, type ('plain' | 'takeout'), type_overridden,
+sources      id, label, root_path, type ('plain' | 'takeout' | 'cleaned'), type_overridden,
              added_at, last_scan_at
 
 photos       id, content_hash UNIQUE (NULL in V0), primary_file_id,
@@ -294,9 +314,23 @@ scan_runs    id, source_id, started_at, finished_at, status,
              skipped_by_ext (JSON text)
 
 settings     key, value
+
+-- Takeout cleanup (migration 5, section 8.10). In every database, used only in output databases
+cleanup_runs   id, input_path, input_label, started_at, finished_at,
+               status ('analysing' | 'planned' | 'copying' | 'done' | 'cancelled'),
+               photos, other_files, duplicates, trash_skipped, errors, bytes_copied
+file_origins   id, run_id, file_id NULL, extra_file_id NULL,   -- exactly one set, the kept row
+               original_relative_path, sidecar_relative_path, album_folder NULL
+extra_files    id, source_id, relative_path, size, modified_time, content_hash, extension,
+               taken_at_local, taken_at_utc, date_source, latitude, longitude,
+               description, favorite, uploaded_at_utc, people (JSON text)
+               UNIQUE (source_id, relative_path)
+cleanup_copies id, run_id, file_id NULL, extra_file_id NULL, source_relative_path,
+               target_relative_path UNIQUE COLLATE NOCASE,
+               status ('pending' | 'done' | 'error'), error NULL
 ```
 
-**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `files(source_id, content_hash)` (move detection), `album_photos(photo_id)`, `photo_people(person_id)`, `scan_runs(source_id)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
+**Indexes:** `photos(taken_at_local)`, `photos(primary_file_id)`, `files(photo_id)`, `files(content_hash)`, `files(source_id, status)`, `files(source_id, content_hash)` (move detection), `album_photos(photo_id)`, `photo_people(person_id)`, `scan_runs(source_id)`, and for cleanup `file_origins(file_id)`, `file_origins(extra_file_id)`, `extra_files(content_hash)`, `cleanup_copies(run_id, status)`. The `photos(primary_file_id)` and `scan_runs(source_id)` indexes keep foreign key checks fast when many files or a source are deleted.
 
 **Design choices**
 
@@ -309,6 +343,8 @@ settings     key, value
 - **V0 databases are replaced, not migrated.** V0 was only a test build, so a database older than schema version 3 (V0 and development builds) is deleted and recreated empty when Imagory starts, and the user adds their folders again. From version 3 on, every change is a numbered migration with a backup.
 - Connection settings: `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`.
 - Schema version lives in `PRAGMA user_version`. Migrations are numbered functions that run in order inside a transaction, and the database file is copied to `imagory.db.bak` before migrating.
+- **Migration 5** adds `'cleaned'` to the `sources.type` CHECK. SQLite can't alter a CHECK, so `sources` is rebuilt with the documented 12-step procedure: `migrate()` turns `foreign_keys` off before this migration (it can't be changed inside a transaction), runs `PRAGMA foreign_key_check` after it, and turns foreign keys back on.
+- `file_origins` rows always point at the kept file or extra-file row (the one that survives in the `cleaned` source); each copy's own input path is in `original_relative_path`, so removing the temporary input source never loses provenance.
 - Face data (V2) will be added by migration: a `faces` table with photo_id, bounding box, embedding BLOB, model name, and model version, plus a `people` table. The `people` table from section 8.9 is reused: V2 adds a face-to-person link rather than a second table.
 
 ## 10. Performance targets
@@ -368,7 +404,7 @@ settings     key, value
 - The UI needs merge, split, and rename for people, because clustering is never perfect.
 - A first full scan of tens of thousands of photos may take hours. Support pause and resume.
 
-**Later:** portable mode (marker file next to the .exe), near-duplicate detection with perceptual hashing (suggest, never hide automatically), Takeout album import, hiding originals behind edited copies, optional export of organized copies, an installer, additional formats.
+**Later:** portable mode (marker file next to the .exe), near-duplicate detection with perceptual hashing (suggest, never hide automatically), Takeout album import, hiding originals behind edited copies, an installer, additional formats.
 
 ## 15. Competitive context
 
@@ -454,6 +490,12 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Date recompute | "Change type…" in the Sources dialog calls `sources.change_source_type`, which sets the type and recomputes dates in one transaction (no photo re-read, Trash rule not applied retroactively), then reloads the grid and reports how many files changed. A Takeout source needs its folder present; otherwise the user is warned and neither the type nor the dates change. Disabled during scans |
 | Filter and album view | The album view is the filter with `album_id` set, so they combine with AND; the filter bar has no album control. Scan-added rows are checked by `photo_matches`, which rejects rows for filters needing the database (missing, duplicates, album) until the end-of-scan reload. A filter or album change resets the scroll; "Remove from album" needs no confirmation; the status bar shows the filtered count only |
 | Viewer | Zoom is relative to fit (up to 16x); zooming past fit loads the full-resolution image. The info panel is hidden by default (`I` key or Info button). Show in Explorer acts on the primary copy: `explorer /select,"<path>"` on Windows, passed as a command line so only the path is quoted (an argument list quotes the whole switch when the path has a space, and Explorer then opens a default folder, found on Windows 11), `wslpath` plus `explorer.exe` on WSL, otherwise the containing folder opens. The fix is untested on real Windows |
+| Takeout cleanup | Brought forward from "Later" (optional export of organized copies), decided with the author 2026-11-07. Writes a deduplicated `YYYY/MM` copy of an extracted Takeout plus `.imagory/` (database, `metadata.json`, reports) to a folder the user picks; originals are never touched, and deleting them is left to the user (section 8.10, `docs/takeout-cleanup-plan.md`). Principle 1 gets an exception for Imagory-created cleanup outputs only |
+| Cleanup copies | One copy per content hash; a file already in the output wins, then a year folder, a non-album folder, the shortest path, path order. Every non-sidecar file is copied (videos, RAW, unreadable images as-is; non-sidecar JSON under `.imagory/takeout-json/`). Trash is skipped and reported. Both original and `-edited` copies are kept. Same-stem companions with no sidecar follow their photo |
+| Cleanup dates | Sidecar, then EXIF, then filename; never the file modified time (in a Takeout it's the extraction time). Undated files go to `Unknown date/` and stay undated in the output and in a `cleaned` source. Video container dates are not read (no new dependency). Copies' mtime is set to the taken time |
+| Cleanup names | Sidecar title with the file's real extension (`.jpg`/`.jpeg` equal), `-edited` suffix kept, on-disk name without a sidecar; sanitized for Windows; casefold clashes get ` (n)`; paths over 250 characters shortened; all renames reported |
+| Cleanup safety | `.part` file, source hashed while copying and compared with the analysis, `.part` re-read and hashed, then renamed. "Safe to delete" only when every non-Trash input file is accounted for against the full walk inventory. Free space checked first |
+| `cleaned` source | New source type (migration 5, `sources` rebuilt for the CHECK). A `cleaned` scan reads metadata from `<root>/.imagory/imagory.db` by path, confirmed by hash; detected by Add source; no "Change type…". Albums from a run are created once on Add to library, with `<name> (Takeout)` on a clash and existing albums never changed; Takeout album folders and Archive become albums only through cleanup. The old Takeout source can be removed afterwards, with confirmation |
 | Editable people | Not in V1: people from Takeout are read-only. Planned for V1.x and flagged as needing planning (section 14). Considered and rejected: storing people as albums, because a rescan would undo manual edits (scans touch people but never albums) |
 
 ## 17. Risks
