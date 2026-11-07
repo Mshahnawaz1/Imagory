@@ -209,15 +209,136 @@ def _migration_4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_5(conn: sqlite3.Connection) -> None:
+    """Takeout cleanup (PRD §8.10): the ``cleaned`` source type and the cleanup tables.
+
+    SQLite can't change a CHECK constraint, so ``sources`` is rebuilt with the documented
+    12-step procedure (https://sqlite.org/lang_altertable.html#otheralter). :func:`migrate`
+    runs this step with foreign keys off and checks them before committing, because the
+    old table is dropped while ``files`` and ``scan_runs`` still reference it. Indexes and
+    triggers on ``sources`` (none in version 4) are recreated from their stored SQL.
+    """
+    extras = [
+        r[0]
+        for r in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE tbl_name = 'sources' "
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+        )
+    ]
+    _execute_script(
+        conn,
+        """
+        CREATE TABLE sources_new (
+            id              INTEGER PRIMARY KEY,
+            label           TEXT NOT NULL,
+            root_path       TEXT NOT NULL,
+            type            TEXT NOT NULL DEFAULT 'plain'
+                            CHECK (type IN ('plain', 'takeout', 'cleaned')),
+            type_overridden INTEGER NOT NULL DEFAULT 0,
+            added_at        TEXT NOT NULL,
+            last_scan_at    TEXT
+        );
+
+        INSERT INTO sources_new (id, label, root_path, type, type_overridden, added_at,
+                                 last_scan_at)
+            SELECT id, label, root_path, type, type_overridden, added_at, last_scan_at
+            FROM sources;
+
+        DROP TABLE sources;
+
+        ALTER TABLE sources_new RENAME TO sources;
+        """,
+    )
+    for sql in extras:
+        conn.execute(sql)
+    _execute_script(
+        conn,
+        """
+        CREATE TABLE cleanup_runs (
+            id            INTEGER PRIMARY KEY,
+            input_path    TEXT NOT NULL COLLATE NOCASE,
+            input_label   TEXT NOT NULL,
+            started_at    TEXT NOT NULL,
+            finished_at   TEXT,
+            status        TEXT NOT NULL DEFAULT 'analysing'
+                          CHECK (status IN ('analysing', 'planned', 'copying', 'done',
+                                            'cancelled')),
+            photos        INTEGER NOT NULL DEFAULT 0,
+            other_files   INTEGER NOT NULL DEFAULT 0,
+            duplicates    INTEGER NOT NULL DEFAULT 0,
+            trash_skipped INTEGER NOT NULL DEFAULT 0,
+            errors        INTEGER NOT NULL DEFAULT 0,
+            bytes_copied  INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE extra_files (
+            id              INTEGER PRIMARY KEY,
+            source_id       INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            relative_path   TEXT NOT NULL COLLATE NOCASE,
+            size            INTEGER NOT NULL,
+            modified_time   INTEGER NOT NULL,
+            content_hash    TEXT,
+            extension       TEXT NOT NULL,
+            taken_at_local  TEXT,
+            taken_at_utc    TEXT,
+            date_source     TEXT,
+            latitude        REAL,
+            longitude       REAL,
+            description     TEXT,
+            favorite        INTEGER NOT NULL DEFAULT 0,
+            uploaded_at_utc TEXT,
+            people          TEXT NOT NULL DEFAULT '[]',
+            UNIQUE (source_id, relative_path)
+        );
+
+        -- file_id / extra_file_id point at the kept row (the one that ends up in the
+        -- cleaned source). No ON DELETE action: deleting a row that still has origins fails.
+        CREATE TABLE file_origins (
+            id                     INTEGER PRIMARY KEY,
+            run_id                 INTEGER NOT NULL REFERENCES cleanup_runs(id),
+            file_id                INTEGER REFERENCES files(id),
+            extra_file_id          INTEGER REFERENCES extra_files(id),
+            original_relative_path TEXT NOT NULL COLLATE NOCASE,
+            sidecar_relative_path  TEXT,
+            album_folder           TEXT,
+            CHECK ((file_id IS NULL) <> (extra_file_id IS NULL))
+        );
+
+        CREATE TABLE cleanup_copies (
+            id                   INTEGER PRIMARY KEY,
+            run_id               INTEGER NOT NULL REFERENCES cleanup_runs(id),
+            file_id              INTEGER REFERENCES files(id),
+            extra_file_id        INTEGER REFERENCES extra_files(id),
+            source_relative_path TEXT NOT NULL COLLATE NOCASE,
+            target_relative_path TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            status               TEXT NOT NULL DEFAULT 'pending'
+                                 CHECK (status IN ('pending', 'done', 'error')),
+            error                TEXT,
+            CHECK ((file_id IS NULL) <> (extra_file_id IS NULL))
+        );
+
+        CREATE INDEX idx_file_origins_file_id ON file_origins(file_id);
+        CREATE INDEX idx_file_origins_extra_file_id ON file_origins(extra_file_id);
+        CREATE INDEX idx_extra_files_content_hash ON extra_files(content_hash);
+        CREATE INDEX idx_cleanup_copies_run_status ON cleanup_copies(run_id, status);
+        """,
+    )
+
+
 MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_1,
     _migration_2,
     _migration_3,
     _migration_4,
+    _migration_5,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 # V0 and development databases (versions 1 and 2) were never released and are replaced.
 FIRST_SUPPORTED_VERSION = 3
+# Migrations that rebuild a referenced table. ``PRAGMA foreign_keys`` can't change inside a
+# transaction, so :func:`migrate` turns it off around these and runs ``foreign_key_check``
+# before committing.
+_REBUILD_MIGRATIONS = frozenset({5})
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
@@ -247,10 +368,40 @@ def migrate(conn: sqlite3.Connection, db_file: Path | None = None) -> int:
             dest.close()
     for version in range(current + 1, SCHEMA_VERSION + 1):
         log.info("Migrating database to schema version %d", version)
+        if version in _REBUILD_MIGRATIONS:
+            _migrate_without_foreign_keys(conn, version)
+        else:
+            with transaction(conn):
+                MIGRATIONS[version - 1](conn)
+                conn.execute(f"PRAGMA user_version = {version}")
+    return SCHEMA_VERSION
+
+
+def _migrate_without_foreign_keys(conn: sqlite3.Connection, version: int) -> None:
+    """Run one table-rebuild migration with foreign keys off (SQLite's 12-step procedure).
+
+    ``PRAGMA foreign_key_check`` runs before the commit: any violation rolls the step back
+    and raises, so the database stays at the previous version (and the backup is kept).
+    Foreign keys are turned back on whatever happens.
+    """
+    was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    if conn.execute("PRAGMA foreign_keys").fetchone()[0]:
+        raise RuntimeError("Could not turn foreign keys off (is a transaction open?)")
+    try:
         with transaction(conn):
             MIGRATIONS[version - 1](conn)
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                shown = ", ".join(f"{r[0]} rowid {r[1]} -> {r[2]}" for r in violations[:10])
+                raise RuntimeError(
+                    f"Migration {version} found {len(violations)} foreign key "
+                    f"violation(s), rolled back: {shown}"
+                )
             conn.execute(f"PRAGMA user_version = {version}")
-    return SCHEMA_VERSION
+    finally:
+        if was_on:
+            conn.execute("PRAGMA foreign_keys=ON")
 
 
 def open_database(db_file: Path) -> sqlite3.Connection:
@@ -273,7 +424,11 @@ def open_database(db_file: Path) -> sqlite3.Connection:
 # --- sources ----------------------------------------------------------------------------
 
 
+# The types a user can choose for a folder (Add source, "Change type…").
 SOURCE_TYPES = ("plain", "takeout")
+# Every type the schema allows. A ``cleaned`` source is only ever created for a cleanup
+# output (PRD §8.10) and can't be chosen or changed by the user.
+ALL_SOURCE_TYPES = (*SOURCE_TYPES, "cleaned")
 _SOURCE_COLUMNS = "id, label, root_path, type, type_overridden, added_at, last_scan_at"
 
 
@@ -282,7 +437,7 @@ class Source:
     id: int
     label: str
     root_path: str
-    type: str  # 'plain' | 'takeout'
+    type: str  # 'plain' | 'takeout' | 'cleaned'
     type_overridden: bool  # the user chose a type other than the detected one
     added_at: str
     last_scan_at: str | None
@@ -320,7 +475,7 @@ def create_source(
     type: str = "plain",
     type_overridden: bool = False,
 ) -> Source:
-    if type not in SOURCE_TYPES:
+    if type not in ALL_SOURCE_TYPES:
         raise ValueError(f"Unknown source type: {type}")
     cur = conn.execute(
         "INSERT INTO sources (label, root_path, type, type_overridden, added_at) "
