@@ -33,8 +33,11 @@ TZ_OFFSET_WINDOW = timedelta(hours=24)
 # capture year, month, day and optionally hour, minute, second. The trailing
 # ``(?!\d)`` stops a longer digit run from matching a shorter pattern.
 _FILENAME_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # IMG_20190131_235959, PXL_20190131_235959123 (milliseconds ignored)
-    re.compile(r"(?:IMG|PXL)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:\d{3})?(?!\d)", re.I),
+    # IMG_20190131_235959, VID_20190131_235959 (Android video), PXL_20190131_235959123
+    # (milliseconds ignored)
+    re.compile(
+        r"(?:IMG|VID|PXL)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:\d{3})?(?!\d)", re.I
+    ),
     # IMG-20190131-WA0001 (WhatsApp, date only)
     re.compile(r"IMG-(\d{4})(\d{2})(\d{2})-WA\d+", re.I),
     # Screenshot_20190131-235959

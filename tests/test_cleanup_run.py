@@ -120,8 +120,6 @@ def group_best(truth: dict, gid: str) -> str | None:
         date = e["expected_date"]
         if e["kind"] not in ("photo", "other") or date is None:
             continue
-        if date["source"] == "filename" and not dates.parse_filename_date(rel.rsplit("/", 1)[1]):
-            continue  # e.g. VID_YYYYMMDD_HHMMSS: not a PRD §8.4 pattern (see report)
         candidates.append(
             dates.DateResult(expected_local(date), date["taken_at_utc"], date["source"])
         )
