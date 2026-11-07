@@ -255,3 +255,230 @@ def test_plain_mode_unchanged(tmp_path):
     photos = [f for f in files if f[:2] in ("19", "20")]
     assert len(photos) == 38
     assert all(f.split("/")[0].isdigit() and f.split("/")[1].isdigit() for f in photos)
+
+
+# --- Takeout cleanup fixtures (--cleanup, --second-account) ------------------------------------
+
+YEAR04 = f"{GP}/Photos from 2004"
+ALBUM = f"{GP}/Cleanup album"
+
+
+@pytest.fixture(scope="module")
+def cleanup(tmp_path_factory) -> tuple[Path, dict, dict]:
+    out = tmp_path_factory.mktemp("cleanup")
+    _run(out, "--takeout", "--cleanup", "--count", "300", "--seed", "7")
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    return out, manifest, manifest["cleanup"]
+
+
+@pytest.fixture(scope="module")
+def second(cleanup, tmp_path_factory) -> tuple[Path, dict]:
+    out = tmp_path_factory.mktemp("second")
+    _run(out, "--second-account", str(cleanup[0]))
+    return out, json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _jtitle(path: Path) -> str:
+    return json.loads(path.read_text(encoding="utf-8"))["title"]
+
+
+def _all_files(out: Path) -> set[str]:
+    return {p.relative_to(out).as_posix() for p in (out / "Takeout").rglob("*") if p.is_file()}
+
+
+def test_cleanup_is_opt_in_and_changes_nothing_else(cleanup, tmp_path):
+    out, manifest, _ = cleanup
+    plain = tmp_path / "plain"
+    _run(plain, "--takeout", "--count", "300", "--seed", "7")
+    plain_manifest = json.loads((plain / "manifest.json").read_text(encoding="utf-8"))
+    assert "cleanup" not in plain_manifest
+    assert {k: v for k, v in manifest.items() if k != "cleanup"} == plain_manifest
+    with_cleanup = _tree(out)
+    for rel, digest in _tree(plain).items():
+        if rel != "manifest.json":
+            assert with_cleanup[rel] == digest
+
+
+def test_cleanup_cases_exist(cleanup):
+    out, _, block = cleanup
+    for rel in (
+        f"{YEAR04}/VID_20040401_120000.mp4",
+        f"{YEAR04}/VID_20040401_120000.mp4.json",
+        f"{YEAR04}/MOV_0007.mov",
+        f"{YEAR04}/MOV_0007.mov.supplemental-metadata.json",
+        f"{YEAR04}/MOTION_0001.HEIC",
+        f"{YEAR04}/MOTION_0001.MOV",
+        f"{YEAR04}/corrupt_cleanup.jpg",
+        f"{YEAR04}/UNUSED_cleanup.jpg.json",
+        f"{YEAR04}/Edited_Test-edited.jpg",
+        f"{YEAR04}/a_b_c.jpg",
+        f"{YEAR04}/Case_Pair.jpg",
+        f"{ALBUM}/case_pair.JPG",
+        f"{ALBUM}/metadata.json",
+        f"{GP}/Archive/CLN_archived.jpg",
+        f"{GP}/Trash/CLN_trashed.jpg",
+    ):
+        assert (out / rel).is_file(), rel
+    assert block["albums"]["Cleanup album"] == "Lisbon trip 2004"
+    assert _jtitle(out / ALBUM / "metadata.json") == "Lisbon trip 2004"
+    files = block["files"]
+    assert files[f"{YEAR04}/a_b_c.jpg"]["title"] == "a/b:c.jpg"
+    assert files[f"{YEAR04}/Trip_ day 1.jpg"]["title"] == "Trip: day 1.jpg"
+    long_name = f"{YEAR04}/Scanned slides from the old shoebox in.jpg"
+    long_title = files[long_name]["title"]
+    assert len(long_title) > 60 and long_title.startswith(long_name.rsplit("/", 1)[1][:-4])
+    upper, lower = files[f"{YEAR04}/Case_Pair.jpg"], files[f"{ALBUM}/case_pair.JPG"]
+    assert upper["title"] != lower["title"]
+    assert upper["title"].lower() == lower["title"].lower()
+
+
+def test_cleanup_block_lists_every_file_with_true_hashes(cleanup):
+    from imagory.thumbs import hash_bytes
+
+    out, _, block = cleanup
+    files = block["files"]
+    assert set(files) == _all_files(out)
+    for rel, entry in files.items():
+        data = (out / rel).read_bytes()
+        assert entry["hash"] == hash_bytes(data)
+        assert entry["size"] == len(data)
+        assert entry["kind"] in ("photo", "other", "json", "sidecar", "trash")
+    groups = block["groups"]
+    assert {e["hash_group"] for e in files.values()} == set(groups)
+    assert len({g["hash"] for g in groups.values()}) == len(groups)  # one group per content
+    for gid, group in groups.items():
+        first = (out / group["members"][0]).read_bytes()
+        assert all((out / m).read_bytes() == first for m in group["members"])
+        assert all(files[m]["hash_group"] == gid for m in group["members"])
+    # P1 has four members: itself, a renamed copy, an album copy and a Trash copy.
+    p1 = files[f"{YEAR04}/IMG_20040315_101010.jpg"]
+    group = groups[p1["hash_group"]]
+    assert len(group["members"]) == 4
+    assert {files[m]["kind"] for m in group["members"]} == {"photo", "trash"}
+    assert group["albums"] == ["Lisbon trip 2004"]
+    video = files[f"{YEAR04}/VID_20040401_120000.mp4"]  # its album copy is exact too
+    assert len(groups[video["hash_group"]]["members"]) == 2
+
+
+def test_cleanup_kinds_and_sidecars(cleanup):
+    out, _, block = cleanup
+    files = block["files"]
+    for rel, entry in files.items():
+        assert (entry["kind"] == "trash") == rel.startswith(f"{GP}/Trash/")
+        if entry["sidecar"]:
+            assert (out / entry["sidecar"]).is_file()
+            assert entry["title"] == _jtitle(out / entry["sidecar"])
+            if not entry["edited_of"]:
+                assert files[entry["sidecar"]]["sidecar_of"] == rel
+        is_sidecar_json = rel.endswith(".json") and not rel.endswith(
+            ("metadata.json", "print-subscriptions.json", "user-generated-memory-titles.json")
+        )
+        if is_sidecar_json:
+            assert entry["kind"] in ("sidecar", "trash")
+            assert entry["title"] == _jtitle(out / rel)
+    assert {r.rsplit("/", 1)[1] for r, e in files.items() if e["kind"] == "json"} == {
+        "metadata.json",
+        "print-subscriptions.json",
+        "user-generated-memory-titles.json",
+    }
+    unused = files[f"{YEAR04}/UNUSED_cleanup.jpg.json"]
+    assert unused["kind"] == "sidecar" and unused["sidecar_of"] is None
+    used = {e["sidecar"] for e in files.values() if e["sidecar"]}
+    assert f"{YEAR04}/UNUSED_cleanup.jpg.json" not in used
+    mov = files[f"{YEAR04}/MOTION_0001.MOV"]
+    assert mov["companion_of"] == f"{YEAR04}/MOTION_0001.HEIC" and mov["sidecar"] is None
+    edited = files[f"{YEAR04}/Edited_Test-edited.jpg"]
+    assert edited["edited_of"] == f"{YEAR04}/Edited_Test.jpg"
+    assert edited["sidecar"] == files[edited["edited_of"]]["sidecar"]
+    mp4 = files[f"{YEAR04}/VID_20040401_120000.mp4"]
+    assert mp4["kind"] == "other" and mp4["title"] == "VID_20040401_120000.mp4"
+
+
+def test_cleanup_readable_flags_and_dates(cleanup):
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    out, _, block = cleanup
+    files = block["files"]
+    bad = f"{YEAR04}/corrupt_cleanup.jpg"
+    assert files[bad]["readable"] is False and files[bad]["kind"] == "photo"
+    with pytest.raises(OSError), Image.open(out / bad) as img:
+        img.load()
+    for rel, entry in files.items():
+        if rel != bad and entry["readable"] is not None:
+            assert entry["readable"] is True
+            with Image.open(out / rel) as img:
+                img.load()
+    # Dates come from the sidecar, EXIF or the filename, never from the file time.
+    for rel in (f"{YEAR04}/clip_nodate.mp4", f"{YEAR04}/MOTION_0001.MOV"):
+        assert files[rel]["expected_date"] is None
+    assert files[f"{YEAR04}/VID_20040402_080000.mp4"]["expected_date"]["source"] == "filename"
+    p1 = files[f"{YEAR04}/IMG_20040315_101010.jpg"]["expected_date"]
+    assert p1["taken_at_local"] == "2004-03-15T11:10:10"
+    assert p1["taken_at_utc"] == "2004-03-15T10:10:10Z"
+    bare = files[f"{YEAR04}/IMG_20040315_101010 copy.jpg"]
+    assert bare["sidecar"] is None and bare["expected_date"]["source"] == "exif"
+    for entry in files.values():
+        date = entry["expected_date"]
+        assert date is None or date["source"] != "mtime"
+        if entry["kind"] in ("json", "sidecar"):
+            assert date is None
+
+
+def test_cleanup_album_memberships(cleanup):
+    _, _, block = cleanup
+    for rel, entry in block["files"].items():
+        if entry["folder_kind"] == "album" and not rel.endswith(".json"):
+            assert entry["albums"] == [block["albums"][rel.split("/")[2]]]
+        else:
+            assert entry["albums"] == []
+
+
+def test_cleanup_sidecars_match_the_real_matcher(cleanup):
+    """The ground truth agrees with imagory's own sidecar matcher for every image."""
+    from imagory import takeout
+
+    out, _, block = cleanup
+    by_folder: dict[str, list[str]] = {}
+    for rel, entry in block["files"].items():
+        if entry["folder_kind"] != "root":
+            by_folder.setdefault(rel.rsplit("/", 1)[0], []).append(rel)
+    for folder, rels in by_folder.items():
+        names = [r.rsplit("/", 1)[1] for r in rels]
+        matches = takeout.match_directory(names, lambda n, f=folder: _jtitle(out / f / n)).matches
+        for rel in rels:
+            name = rel.rsplit("/", 1)[1]
+            side = block["files"][rel]["sidecar"]
+            if name in matches:
+                assert matches[name] == (side.rsplit("/", 1)[1] if side else None), rel
+
+
+def test_cleanup_is_deterministic(cleanup, tmp_path):
+    out, _, _ = cleanup
+    again = tmp_path / "again"
+    _run(again, "--takeout", "--cleanup", "--count", "300", "--seed", "7")
+    assert _tree(again) == _tree(out)
+
+
+def test_second_account_overlaps_and_clashes(cleanup, second):
+    first_out, _, first = cleanup
+    out, manifest = second
+    info = manifest["second_account"]
+    block = manifest["cleanup"]
+    files = block["files"]
+    assert set(files) == _all_files(out) and len(files) < len(first["files"]) // 10
+    for rel in info["shared"]:
+        assert (out / rel).read_bytes() == (first_out / rel).read_bytes()
+        assert files[rel]["hash"] == first["files"][rel]["hash"]
+    for rel in info["clashing"]:  # same path, same sidecar name, different content
+        assert (out / rel).read_bytes() != (first_out / rel).read_bytes()
+        assert files[rel]["sidecar"] == first["files"][rel]["sidecar"]
+        assert files[rel]["title"] == first["files"][rel]["title"]
+    assert block["albums"][info["album_clash"]] == first["albums"][info["album_clash"]]
+    common = {e["hash"] for e in files.values()} & {e["hash"] for e in first["files"].values()}
+    assert set(info["shared_hashes"]) == common
+    p1 = f"{YEAR04}/IMG_20040315_101010.jpg"
+    assert files[p1]["expected_date"] == first["files"][p1]["expected_date"]
+    for entry in files.values():
+        if entry["sidecar"]:
+            assert entry["title"] == _jtitle(out / entry["sidecar"])
