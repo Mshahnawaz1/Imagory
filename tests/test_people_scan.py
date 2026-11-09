@@ -186,10 +186,9 @@ def test_parse_uploaded_odd(value):
     assert parse(creationTime=value).uploaded_utc is None
 
 
-def test_migration_4_creates_people_tables(tmp_path):
+def test_new_database_has_people_tables_and_takeout_columns(tmp_path):
     conn = db.open_database(tmp_path / "imagory.db")
     try:
-        assert db.SCHEMA_VERSION >= 4
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"people", "photo_people"} <= tables
         cols = {r[1] for r in conn.execute("PRAGMA table_info(photos)")}

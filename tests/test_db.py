@@ -85,6 +85,28 @@ def test_newer_schema_is_refused(tmp_path):
         db.migrate(conn)
 
 
+def test_development_database_is_replaced(tmp_path):
+    path = tmp_path / "imagory.db"
+    conn = db.open_database(path)
+    db.create_source(conn, "/photos", "Photos")
+    conn.execute(f"PRAGMA user_version = {db.BASELINE_VERSION - 1}")
+    conn.close()
+
+    conn = db.open_database(path)
+    assert db.schema_version(conn) == db.SCHEMA_VERSION
+    assert db.list_sources(conn) == []
+    assert not (tmp_path / "imagory.db.bak").exists()
+    conn.close()
+
+
+def test_migrate_refuses_a_database_below_the_baseline(tmp_path):
+    conn = db.open_database(tmp_path / "imagory.db")
+    conn.execute(f"PRAGMA user_version = {db.BASELINE_VERSION - 1}")
+    with pytest.raises(RuntimeError, match="too old"):
+        db.migrate(conn)
+    conn.close()
+
+
 def test_relative_path_is_case_insensitive(conn):
     src = db.create_source(conn, "/photos", "photos")
     db.insert_file(conn, src.id, _record("A/IMG.jpg"), db.utc_now())

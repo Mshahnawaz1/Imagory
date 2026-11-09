@@ -1,4 +1,4 @@
-"""Albums (PRD §8.8): migration 2, queries, cascades, and dialogs."""
+"""Albums (PRD §8.8): schema, queries, cascades, and dialogs."""
 
 import os
 
@@ -32,23 +32,6 @@ def add_photo(conn, source_id, path, taken="2020-01-01T00:00:00") -> int:
 @pytest.fixture
 def src(conn):
     return db.create_source(conn, "/photos", "Photos")
-
-
-def test_pre_release_database_is_replaced(tmp_path):
-    path = tmp_path / "imagory.db"
-    conn = db.connect(path)
-    with db.transaction(conn):
-        db._migration_1(conn)
-        conn.execute("PRAGMA user_version = 1")
-    db.create_source(conn, "/photos", "Photos")
-    conn.close()
-
-    conn = db.open_database(path)
-    assert db.schema_version(conn) == db.SCHEMA_VERSION
-    assert db.list_sources(conn) == []
-    assert db.list_albums(conn) == []
-    assert not (tmp_path / "imagory.db.bak").exists()
-    conn.close()
 
 
 def test_album_crud_and_names(conn):

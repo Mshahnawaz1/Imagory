@@ -293,7 +293,7 @@ photos       id, content_hash UNIQUE (NULL in V0), primary_file_id,
              width, height, format,
              taken_at_local, taken_at_utc, date_source,
              latitude, longitude,
-             description, favorite (0 | 1), uploaded_at_utc     -- Takeout only (migration 4)
+             description, favorite (0 | 1), uploaded_at_utc     -- Takeout only
 
 files        id, source_id, photo_id, relative_path, size, modified_time,
              content_hash, status ('ok' | 'missing'),
@@ -303,7 +303,7 @@ files        id, source_id, photo_id, relative_path, size, modified_time,
              first_seen_at, last_seen_at
              UNIQUE (source_id, relative_path)
 
-people       id, name UNIQUE COLLATE NOCASE                -- migration 4
+people       id, name UNIQUE COLLATE NOCASE
 photo_people photo_id, person_id    PRIMARY KEY (photo_id, person_id)
 
 albums       id, name, created_at
@@ -315,7 +315,7 @@ scan_runs    id, source_id, started_at, finished_at, status,
 
 settings     key, value
 
--- Takeout cleanup (migration 5, section 8.10). In every database, used only in output databases
+-- Takeout cleanup (section 8.10). In every database, used only in output databases
 cleanup_runs   id, input_path, input_label, started_at, finished_at,
                status ('analysing' | 'planned' | 'copying' | 'done' | 'cancelled'),
                photos, other_files, duplicates, trash_skipped, errors, bytes_copied
@@ -340,10 +340,9 @@ cleanup_copies id, run_id, file_id NULL, extra_file_id NULL, source_relative_pat
 - `modified_time` is stored as integer nanoseconds (`st_mtime_ns`), so the scan diff compares exact values.
 - `taken_at_local` is stored as ISO 8601 text with no offset (`2019-01-31T23:59:59`). `taken_at_utc` and the other timestamps (`added_at`, `first_seen_at`, and so on) are stored as UTC ISO 8601 text ending in `Z`. Both sort correctly as text.
 - `photos.primary_file_id` is nullable and is set after the file row is inserted, which breaks the circular reference with `files.photo_id`.
-- **V0 databases are replaced, not migrated.** V0 was only a test build, so a database older than schema version 3 (V0 and development builds) is deleted and recreated empty when Imagory starts, and the user adds their folders again. From version 3 on, every change is a numbered migration with a backup.
+- **One baseline schema.** No version has been released yet, so the schema is created directly at version 5 (the baseline) instead of by replaying development migrations. A database below the baseline comes from a development build and is deleted and recreated empty when Imagory starts; the user adds their folders again.
 - Connection settings: `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`.
-- Schema version lives in `PRAGMA user_version`. Migrations are numbered functions that run in order inside a transaction, and the database file is copied to `imagory.db.bak` before migrating.
-- **Migration 5** adds `'cleaned'` to the `sources.type` CHECK. SQLite can't alter a CHECK, so `sources` is rebuilt with the documented 12-step procedure: `migrate()` turns `foreign_keys` off before this migration (it can't be changed inside a transaction), runs `PRAGMA foreign_key_check` after it, and turns foreign keys back on.
+- Schema version lives in `PRAGMA user_version`. Every change after the baseline is a numbered migration (6, 7, …) that runs inside a transaction, and the database file is copied to `imagory.db.bak` before migrating.
 - `file_origins` rows always point at the kept file or extra-file row (the one that survives in the `cleaned` source); each copy's own input path is in `original_relative_path`, so removing the temporary input source never loses provenance.
 - Face data (V2) will be added by migration: a `faces` table with photo_id, bounding box, embedding BLOB, model name, and model version, plus a `people` table. The `people` table from section 8.9 is reused: V2 adds a face-to-person link rather than a second table.
 
@@ -471,7 +470,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Move detection | A new file matches any missing row of the same source with the same hash, oldest first, not only rows that went missing in this scan, because a cancelled scan keeps no state. Moves never cross sources |
 | Changed hash | A sole file edited in place re-keys its photo (keeping its id and albums); otherwise the file moves to the photo with the new hash, and a photo left with no files is deleted, its album memberships moving with the file |
 | Thumbnail cleanup | Removing a source or missing items deletes only thumbnails of photos being deleted; shared thumbnails stay |
-| V0 databases | Replaced by a fresh database (schema version below 3), not migrated; V0 held no useful scans. No backup is kept for them. From version 3 on, migrations and the pre-migration backup apply as before |
+| Schema baseline | No version has been released publicly, so the development migrations 1–5 were folded into one baseline schema at version 5 (same tables, columns and column order). Databases below 5 are replaced, not migrated, and no backup is kept for them. Later changes are numbered migrations from 6 on, with the pre-migration backup |
 | Takeout sidecar matching | Case-insensitive; image name plus an optional prefix of `.supplemental-metadata`, then an optional `(n)`; a numbered image `X(n).ext` takes `X.ext(n).json` first; the counter must match; long names match by prefix of at least 30 characters. Ties: title match, exact before truncated, original before edited, then name; greedy, so the result does not depend on order |
 | Edited copies | Use their own sidecar if any, otherwise share the original's. `-edited` is confirmed; localized suffixes are unconfirmed guesses |
 | Takeout location | `geoData` only (ignored when both coordinates are 0); no fallback to `geoDataExif`, so a location removed in Google Photos does not return |
@@ -497,8 +496,8 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Cleanup dates | Sidecar, then EXIF, then filename; never the file modified time (in a Takeout it's the extraction time). Undated files go to `Unknown date/` and stay undated in the output and in a `cleaned` source. Video container dates are not read (no new dependency). Copies' mtime is set to the taken time |
 | Cleanup names | Sidecar title with the file's real extension (`.jpg`/`.jpeg` equal), `-edited` suffix kept, on-disk name without a sidecar; sanitized for Windows; casefold clashes get ` (n)`; paths over 250 characters shortened; all renames reported |
 | Cleanup safety | `.part` file, source hashed while copying and compared with the analysis, `.part` re-read and hashed, then renamed. "Safe to delete" only when every non-Trash input file is accounted for against the full walk inventory. Free space checked first |
-| `cleaned` source | New source type (migration 5, `sources` rebuilt for the CHECK). A `cleaned` scan reads metadata from `<root>/.imagory/imagory.db` by path, confirmed by hash; detected by Add source; no "Change type…". Albums from a run are created once on Add to library, with `<name> (Takeout)` on a clash and existing albums never changed; Takeout album folders and Archive become albums only through cleanup. The old Takeout source can be removed afterwards, with confirmation |
-| Migration 5 | SQLite's 12-step rebuild of `sources` so the CHECK allows `cleaned`; `migrate()` turns foreign keys off around it and runs `foreign_key_check` before the commit, so a violation leaves version 4 and the backup. `SOURCE_TYPES` (`plain`, `takeout`) are the types a user can choose; `ALL_SOURCE_TYPES` adds `cleaned`, so a source can't be changed to or from `cleaned` |
+| `cleaned` source | New source type. A `cleaned` scan reads metadata from `<root>/.imagory/imagory.db` by path, confirmed by hash; detected by Add source; no "Change type…". Albums from a run are created once on Add to library, with `<name> (Takeout)` on a clash and existing albums never changed; Takeout album folders and Archive become albums only through cleanup. The old Takeout source can be removed afterwards, with confirmation |
+| User-chosen source types | `SOURCE_TYPES` (`plain`, `takeout`) are the types a user can choose; `ALL_SOURCE_TYPES` adds `cleaned`, so a source can't be changed to or from `cleaned` |
 | Cleanup provenance | `file_origins` rows always point at the kept row; each copy's own input path is in `original_relative_path`, and `album_folder` holds the album's display name (album JSON title, folder name, or `Archive`). Finalise gives kept rows the best non-mtime date of all their duplicates, including those from later runs, and drops failed copies so a rerun plans them again |
 | Cleanup resume | Cancel and resume need no saved state beyond the output database. A destination that already exists is never overwritten: identical content counts as done, anything else is a failure. Resume tolerates 1 µs of mtime difference (NTFS has 100 ns steps), removes only the `.part` files of pending copies, and retries failed copies. Renames are stored with the run (output `settings`) for the report |
 | Cleanup output database | The main library opens it with `mode=ro&immutable=1`, or reads a temporary copy when a non-empty `-wal` exists; plain `mode=ro` is never used, because it would leave `-wal`/`-shm` files in the user's folder. If it is missing, date recompute for the `cleaned` source refuses and the scan uses the plain rules with a warning, instead of re-dating every file by mtime |
