@@ -369,7 +369,7 @@ def test_window_shows_month_sections_selection_and_viewer(qtbot, many, no_dialog
     before = snapshot(many)
     window, conn = open_window(qtbot)
     assert window.pages.currentIndex() == mw.PAGE_EMPTY
-    window.add_source(many)
+    window.source_actions.add_source(many)
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     assert window.pages.currentIndex() == mw.PAGE_GRID
     assert window.photos == db.grid_photos(conn)
@@ -423,7 +423,7 @@ def test_window_shows_month_sections_selection_and_viewer(qtbot, many, no_dialog
 def test_reload_keeps_top_photo_in_view(qtbot, many, no_dialogs, monkeypatch):
     monkeypatch.setattr(grid, "FIRST_PAGE", 5)  # the anchor arrives with the background rows
     window, conn = open_window(qtbot)
-    window.add_source(many)
+    window.source_actions.add_source(many)
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     qtbot.waitUntil(lambda: window.grid_source.complete)
     window.grid.scroll_to(30, at_top=True)
@@ -446,7 +446,7 @@ def test_empty_source_shows_empty_text(qtbot, tmp_path, no_dialogs):
     empty = tmp_path / "empty"
     empty.mkdir()
     window, conn = open_window(qtbot)
-    window.add_source(empty)
+    window.source_actions.add_source(empty)
     assert window.grid._empty_text == "Looking for photos…"
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     assert window.pages.currentIndex() == mw.PAGE_GRID

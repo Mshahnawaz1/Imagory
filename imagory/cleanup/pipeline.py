@@ -67,12 +67,7 @@ from imagory.cleanup.types import (
     PreviewCounts,
     Rename,
 )
-from imagory.scanner import (
-    Progress,
-    Scanner,
-    WalkedFile,
-    default_workers,
-)
+from imagory.scanner import Progress, Scanner, WalkedFile, default_workers
 from imagory.thumbs import fold_path
 
 log = logging.getLogger(__name__)

@@ -10,8 +10,10 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from imagory import db, paths, thumbs  # noqa: E402
+from imagory.scanner import ScanSummary  # noqa: E402
 from imagory.ui import grid  # noqa: E402
 from imagory.ui import main_window as mw  # noqa: E402
+from imagory.ui.sources_dialog import TYPE_NAMES  # noqa: E402
 from tests.imaging import make_image  # noqa: E402
 
 
@@ -52,7 +54,7 @@ def test_first_launch_scan_browse_and_reopen(qtbot, photos, no_dialogs):
     assert window.pages.currentIndex() == mw.PAGE_EMPTY
     assert not window.rescan_action.isEnabled()
 
-    window.add_source(photos)
+    window.source_actions.add_source(photos)
     wait_scan(qtbot, window)
     assert no_dialogs and no_dialogs[-1][0] == "Scan finished"
     assert "Added: 3" in no_dialogs[-1][1]
@@ -90,11 +92,11 @@ def test_first_launch_scan_browse_and_reopen(qtbot, photos, no_dialogs):
 
 def test_rescan_and_missing_thumbnail_regenerates(qtbot, photos, no_dialogs):
     window, conn = open_window(qtbot)
-    window.add_source(photos)
+    window.source_actions.add_source(photos)
     wait_scan(qtbot, window)
     thumbs.clear_thumbs(window.thumbs_root)
     (photos / "old.jpg").unlink()
-    window.rescan()
+    window.scan.rescan()
     wait_scan(qtbot, window)
     assert "Missing: 1" in no_dialogs[-1][1]
     assert len(window.photos) == 2
@@ -109,9 +111,9 @@ def test_two_sources_remove_one(qtbot, photos, tmp_path, no_dialogs):
     other = tmp_path / "other"
     make_image(other / "x.jpg", taken="2010:01:01 00:00:00")
     window, conn = open_window(qtbot)
-    window.add_source(photos, "Phone")
+    window.source_actions.add_source(photos, "Phone")
     wait_scan(qtbot, window)
-    second = window.add_source(other, "Camera")
+    second = window.source_actions.add_source(other, "Camera")
     wait_scan(qtbot, window)
     assert [s.label for s in window.sources] == ["Phone", "Camera"]
     names = [p.relative_path for p in window.photos]
@@ -124,17 +126,17 @@ def test_two_sources_remove_one(qtbot, photos, tmp_path, no_dialogs):
     assert "Camera" in window.viewer.status.text()
 
     # Rescan all reports each source under its label.
-    window.rescan()
+    window.scan.rescan()
     wait_scan(qtbot, window)
     assert no_dialogs[-1][0] == "Scan finished"
     assert "Phone\nFound: 3" in no_dialogs[-1][1] and "Camera\nFound: 1" in no_dialogs[-1][1]
 
-    window.remove_source(second.id)
+    window.source_actions.remove_source(second.id)
     assert window.pages.currentIndex() == mw.PAGE_GRID
     assert [p.relative_path for p in window.photos] == ["new.jpg", "mid.png", "old.jpg"]
     assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
     assert (other / "x.jpg").exists()  # files on disk are never touched
-    window.remove_source(window.sources[0].id)
+    window.source_actions.remove_source(window.sources[0].id)
     assert window.pages.currentIndex() == mw.PAGE_EMPTY
     assert sorted(p.name for p in photos.iterdir()) == ["mid.png", "new.jpg", "old.jpg"]
     window.close()
@@ -145,14 +147,14 @@ def test_unavailable_source_is_reported_and_others_scan(qtbot, photos, tmp_path,
     other = tmp_path / "usb"
     make_image(other / "x.jpg")
     window, conn = open_window(qtbot)
-    window.add_source(photos, "Phone")
+    window.source_actions.add_source(photos, "Phone")
     wait_scan(qtbot, window)
-    window.add_source(other, "USB")
+    window.source_actions.add_source(other, "USB")
     wait_scan(qtbot, window)
     moved = tmp_path / "usb-moved"
     other.rename(moved)  # the drive letter changed
     make_image(photos / "later.jpg", color=(0, 90, 0))  # not a copy of x.jpg
-    window.rescan()
+    window.scan.rescan()
     wait_scan(qtbot, window)
     title, text = no_dialogs[-1]
     assert title == "Scan finished with problems"
@@ -161,7 +163,7 @@ def test_unavailable_source_is_reported_and_others_scan(qtbot, photos, tmp_path,
     assert len(window.photos) == 5  # nothing was marked missing
 
     usb = next(s for s in window.sources if s.label == "USB")
-    window.relocate_source(usb.id, moved)
+    window.source_actions.relocate_source(usb.id, moved)
     wait_scan(qtbot, window)
     assert window.sources_by_id[usb.id].root_path == str(moved)
     assert "Unchanged: 1" in no_dialogs[-1][1] and "Missing: 0" in no_dialogs[-1][1]
@@ -171,11 +173,11 @@ def test_unavailable_source_is_reported_and_others_scan(qtbot, photos, tmp_path,
 
 def test_rename_and_change_type(qtbot, photos, no_dialogs):
     window, conn = open_window(qtbot)
-    source = window.add_source(photos)
+    source = window.source_actions.add_source(photos)
     assert (source.label, source.type, source.type_overridden) == ("photos", "plain", False)
     wait_scan(qtbot, window)
-    window.rename_source(source.id, "Holidays")
-    window.change_source_type(source.id, "takeout")
+    window.source_actions.rename_source(source.id, "Holidays")
+    window.source_actions.change_source_type(source.id, "takeout")
     updated = window.sources_by_id[source.id]
     assert (updated.label, updated.type, updated.type_overridden) == ("Holidays", "takeout", True)
     window.close()
@@ -193,7 +195,7 @@ def test_change_type_recomputes_dates_and_reorders_grid(qtbot, tmp_path, no_dial
     src_dir = make_source(tmp_path)
     before = snapshot(src_dir)
     window, conn = open_window(qtbot)
-    source = window.add_source(src_dir, source_type="plain")
+    source = window.source_actions.add_source(src_dir, source_type="plain")
     wait_scan(qtbot, window)
 
     def dates():
@@ -205,8 +207,8 @@ def test_change_type_recomputes_dates_and_reorders_grid(qtbot, tmp_path, no_dial
         "IMG_1.jpg": "mtime",
     }
 
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: (mw.TYPE_NAMES["takeout"], True))
-    window.change_type_interactive(window.sources_by_id[source.id])
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: (TYPE_NAMES["takeout"], True))
+    window.source_actions.change_type_interactive(window.sources_by_id[source.id])
     assert no_dialogs[-1][0] == "Change source type" and "2 files" in no_dialogs[-1][1]
     assert window.sources_by_id[source.id].type == "takeout"
     # Both sidecar dates are 2018-06-15, newer than the 2017 filename date: grid reordered.
@@ -219,9 +221,9 @@ def test_change_type_recomputes_dates_and_reorders_grid(qtbot, tmp_path, no_dial
     assert snapshot(src_dir) == before
 
     # Back to plain, then to Takeout with the folder unplugged: warned, nothing changes.
-    window.change_source_type(source.id, "plain")
+    window.source_actions.change_source_type(source.id, "plain")
     shutil.rmtree(src_dir)
-    window.change_type_interactive(window.sources_by_id[source.id])
+    window.source_actions.change_type_interactive(window.sources_by_id[source.id])
     assert no_dialogs[-1][0] == "Change source type" and "not available" in no_dialogs[-1][1]
     assert window.sources_by_id[source.id].type == "plain"
     assert dates()["IMG_9.jpg"] == "exif"
@@ -233,7 +235,7 @@ def test_sources_dialog_lists_sources(qtbot, photos, no_dialogs):
     from imagory.ui.sources_dialog import SourcesDialog
 
     window, conn = open_window(qtbot)
-    window.add_source(photos, "Phone")
+    window.source_actions.add_source(photos, "Phone")
     assert window.scanning
     dialog = SourcesDialog(window)
     qtbot.addWidget(dialog)
@@ -244,7 +246,7 @@ def test_sources_dialog_lists_sources(qtbot, photos, no_dialogs):
     assert dialog.remove_button.isEnabled()
     assert dialog.table.item(0, 3).text() == "3"
     assert dialog.table.item(0, 5).text() != "Never"
-    window.rename_source(window.sources[0].id, "Phone backup")
+    window.source_actions.rename_source(window.sources[0].id, "Phone backup")
     assert dialog.table.item(0, 0).text() == "Phone backup"
     window.close()
     conn.close()
@@ -268,11 +270,11 @@ def test_cancel_scan_from_ui(qtbot, tmp_path, no_dialogs):
     for i in range(60):
         make_image(src / f"{i:03}.jpg", (64, 64))
     window, conn = open_window(qtbot)
-    window.add_source(src)
-    window.cancel_scan()
+    window.source_actions.add_source(src)
+    window.scan.cancel()
     wait_scan(qtbot, window)
     assert no_dialogs[-1][0] in ("Scan cancelled", "Scan finished")
-    window.rescan()
+    window.scan.rescan()
     wait_scan(qtbot, window)
     assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 60
     window.close()
@@ -280,9 +282,7 @@ def test_cancel_scan_from_ui(qtbot, tmp_path, no_dialogs):
 
 
 def test_summary_text():
-    summary = mw.ScanSummary(
-        "completed", db.ScanCounts(10, 5, 1, 4, 2, 1, {".mp4": 3, ".txt": 1}), 1
-    )
+    summary = ScanSummary("completed", db.ScanCounts(10, 5, 1, 4, 2, 1, {".mp4": 3, ".txt": 1}), 1)
     text = mw.summary_text(summary)
     assert "Added: 5" in text and "Errors (unreadable files): 1" in text
     assert "Skipped (not supported): 4 (.mp4 3, .txt 1)" in text
@@ -294,7 +294,7 @@ def test_large_grid_loads_first_page_then_rest(qtbot, tmp_path, no_dialogs, monk
     for i in range(12):
         make_image(src / f"{i:03}.jpg", (16, 16), taken=f"2020:01:{i + 1:02} 00:00:00")
     window, conn = open_window(qtbot)
-    window.add_source(src)
+    window.source_actions.add_source(src)
     wait_scan(qtbot, window)
     assert window.grid.count() == 12  # known from the month counts before the rows
     qtbot.waitUntil(lambda: window.grid_source.complete)
@@ -307,7 +307,7 @@ def test_large_grid_loads_first_page_then_rest(qtbot, tmp_path, no_dialogs, monk
 
 def test_back_button_and_keys_close_viewer(qtbot, photos, no_dialogs):
     window, conn = open_window(qtbot)
-    window.add_source(photos)
+    window.source_actions.add_source(photos)
     wait_scan(qtbot, window)
     for close in (
         lambda: qtbot.mouseClick(window.viewer.back_button, Qt.MouseButton.LeftButton),
@@ -327,7 +327,7 @@ def test_scan_batches_appear_in_grid_order_and_viewer_keeps_photo(
     qtbot, photos, no_dialogs, monkeypatch
 ):
     window, conn = open_window(qtbot)
-    window.add_source(photos)
+    window.source_actions.add_source(photos)
     wait_scan(qtbot, window)
     by_name = {p.relative_path: p for p in window.photos}
     # Pretend the scan had only committed mid.png so far, with the viewer open on it.
@@ -349,10 +349,10 @@ def test_scan_batches_appear_in_grid_order_and_viewer_keeps_photo(
 
 def test_rescan_reload_keeps_open_photo(qtbot, photos, no_dialogs):
     window, conn = open_window(qtbot)
-    window.add_source(photos)
+    window.source_actions.add_source(photos)
     wait_scan(qtbot, window)
     window.open_viewer(1)
-    window.rescan()
+    window.scan.rescan()
     wait_scan(qtbot, window)
     assert window.pages.currentIndex() == mw.PAGE_VIEWER
     assert window.viewer.photos is window.photos
@@ -367,17 +367,17 @@ def test_relocate_warns_when_no_photos_are_in_the_new_folder(
     empty = tmp_path / "empty"
     empty.mkdir()
     window, conn = open_window(qtbot)
-    source = window.add_source(photos, "Phone")
+    source = window.source_actions.add_source(photos, "Phone")
     wait_scan(qtbot, window)
     shown = []
-    monkeypatch.setattr(mw.MainWindow, "_pick_folder", lambda self, title, start=None: empty)
+    monkeypatch.setattr(mw.SourceActions, "_pick_folder", lambda self, title, start=None: empty)
 
     def answer(_parent, title, text, *args):
         shown.append((title, text))
         return QMessageBox.StandardButton.Cancel
 
     monkeypatch.setattr(QMessageBox, "question", answer)
-    window.relocate_source_interactive(source)
+    window.source_actions.relocate_source_interactive(source)
     assert shown[0][0] == "Relocate source" and "None of the 3 photos" in shown[0][1]
     assert window.sources_by_id[source.id].root_path == str(photos)  # cancelled: unchanged
     assert not window.scanning
@@ -385,8 +385,8 @@ def test_relocate_warns_when_no_photos_are_in_the_new_folder(
     # A folder that has the photos is relocated to without asking, then rescanned.
     moved = tmp_path / "moved"
     photos.rename(moved)
-    monkeypatch.setattr(mw.MainWindow, "_pick_folder", lambda self, title, start=None: moved)
-    window.relocate_source_interactive(source)
+    monkeypatch.setattr(mw.SourceActions, "_pick_folder", lambda self, title, start=None: moved)
+    window.source_actions.relocate_source_interactive(source)
     assert len(shown) == 1
     assert window.scanning
     wait_scan(qtbot, window)
@@ -398,7 +398,7 @@ def test_relocate_warns_when_no_photos_are_in_the_new_folder(
 
 def test_remove_asks_first_and_says_files_are_kept(qtbot, photos, monkeypatch, no_dialogs):
     window, conn = open_window(qtbot)
-    source = window.add_source(photos, "Phone")
+    source = window.source_actions.add_source(photos, "Phone")
     wait_scan(qtbot, window)
     asked = []
 
@@ -407,7 +407,7 @@ def test_remove_asks_first_and_says_files_are_kept(qtbot, photos, monkeypatch, n
         return QMessageBox.StandardButton.Cancel
 
     monkeypatch.setattr(QMessageBox, "question", answer)
-    window.remove_source_interactive(source)
+    window.source_actions.remove_source_interactive(source)
     title, text = asked[0]
     assert title == "Remove source" and "“Phone”" in text
     assert "3 photos" in text and "Your photos on disk are not touched" in text

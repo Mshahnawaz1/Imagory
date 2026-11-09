@@ -682,9 +682,9 @@ def test_dialogs_show_cleaned_type_without_change_type(qtbot, output, lib, monke
     window.show()
     plain = output.parent / "plain"
     make_image(plain / "a.jpg")
-    window.add_source(plain, "Plain")
+    window.source_actions.add_source(plain, "Plain")
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
-    source = window.add_source(output, "Clean")  # detected as cleaned
+    source = window.source_actions.add_source(output, "Clean")  # detected as cleaned
     assert source.type == "cleaned"
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     assert_unchanged(output, before)

@@ -14,12 +14,7 @@ from pathlib import Path
 
 from imagory import takeout
 from imagory.cleanup.checks import norm_path
-from imagory.scanner import (
-    SUPPORTED_EXTENSIONS,
-    WalkedFile,
-    extension_of,
-    is_skipped_dir,
-)
+from imagory.scanner import SUPPORTED_EXTENSIONS, WalkedFile, extension_of, is_skipped_dir
 
 log = logging.getLogger(__name__)
 

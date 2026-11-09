@@ -147,7 +147,7 @@ class SourcesDialog(QDialog):
         self.remove_missing_button = QPushButton("Remove missing…", self)
         self.remove_button = QPushButton("Remove…", self)
         close_button = QPushButton("Close", self)
-        self.add_button.clicked.connect(window.add_source_interactive)
+        self.add_button.clicked.connect(window.source_actions.add_source_interactive)
         self.rescan_button.clicked.connect(self._rescan)
         self.rename_button.clicked.connect(self._rename)
         self.type_button.clicked.connect(self._change_type)
@@ -181,7 +181,7 @@ class SourcesDialog(QDialog):
 
     def refresh(self) -> None:
         selected = self.selected_source()
-        stats = self._stats = self.window_.source_stats()
+        stats = self._stats = self.window_.source_actions.source_stats()
         sources = self.window_.sources
         self.table.setRowCount(len(sources))
         for row, source in enumerate(sources):
@@ -238,23 +238,23 @@ class SourcesDialog(QDialog):
 
     def _rescan(self) -> None:
         if (source := self.selected_source()) is not None:
-            self.window_.rescan_sources([source])
+            self.window_.scan.rescan_sources([source])
 
     def _rename(self) -> None:
         if (source := self.selected_source()) is not None:
-            self.window_.rename_source_interactive(source)
+            self.window_.source_actions.rename_source_interactive(source)
 
     def _change_type(self) -> None:
         if (source := self.selected_source()) is not None:
-            self.window_.change_type_interactive(source)
+            self.window_.source_actions.change_type_interactive(source)
 
     def _relocate(self) -> None:
         if (source := self.selected_source()) is not None:
-            self.window_.relocate_source_interactive(source)
+            self.window_.source_actions.relocate_source_interactive(source)
 
     def _remove(self) -> None:
         if (source := self.selected_source()) is not None:
-            self.window_.remove_source_interactive(source)
+            self.window_.source_actions.remove_source_interactive(source)
 
     def _remove_missing(self) -> None:
         """Ask first: forgetting missing items is never automatic (PRD §8.2)."""
@@ -273,4 +273,4 @@ class SourcesDialog(QDialog):
             QMessageBox.StandardButton.Cancel,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self.window_.remove_missing_items(source.id)
+            self.window_.source_actions.remove_missing_items(source.id)

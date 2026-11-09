@@ -32,7 +32,7 @@ def window(qtbot, tmp_path):
     qtbot.addWidget(win)
     win.resize(900, 700)
     win.show()
-    win.add_source(src)
+    win.source_actions.add_source(src)
     qtbot.waitUntil(lambda: not win.scanning, timeout=60_000)
     qtbot.waitUntil(lambda: win.grid_source.complete, timeout=10_000)
     yield win

@@ -297,7 +297,7 @@ def test_open_in_viewer_from_the_grid_menu(qtbot, tmp_path, monkeypatch):
     qtbot.addWidget(window)
     window.resize(900, 700)
     window.show()
-    window.add_source(root)
+    window.source_actions.add_source(root)
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     assert window.grid.count() == 1
     before = snapshot(root)

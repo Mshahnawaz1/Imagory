@@ -70,11 +70,7 @@ from imagory.db.cleanup import (
     set_run_status,
     upsert_extra_files,
 )
-from imagory.db.connection import (
-    connect,
-    transaction,
-    utc_now,
-)
+from imagory.db.connection import connect, transaction, utc_now
 from imagory.db.files import (
     DateInputs,
     FileRecord,
@@ -107,20 +103,9 @@ from imagory.db.grid import (
     grid_photos_for_files,
     month_counts,
 )
-from imagory.db.people import (
-    Person,
-    list_people,
-    people_for_photo,
-    set_photo_takeout_metadata,
-)
-from imagory.db.photo_info import (
-    PhotoInfo,
-    PhotoLocation,
-    photo_info,
-)
-from imagory.db.photos import (
-    refresh_photos,
-)
+from imagory.db.people import Person, list_people, people_for_photo, set_photo_takeout_metadata
+from imagory.db.photo_info import PhotoInfo, PhotoLocation, photo_info
+from imagory.db.photos import refresh_photos
 from imagory.db.schema import (
     BASELINE_VERSION,
     MIGRATIONS,
@@ -129,10 +114,7 @@ from imagory.db.schema import (
     open_database,
     schema_version,
 )
-from imagory.db.settings import (
-    get_setting,
-    set_setting,
-)
+from imagory.db.settings import get_setting, set_setting
 from imagory.db.sources import (
     ALL_SOURCE_TYPES,
     SOURCE_TYPES,

@@ -55,7 +55,7 @@ def test_filter_bar_drives_grid_counts_and_status(qtbot, photos_dir):
     before = snapshot(photos_dir)
     window, conn = open_window(qtbot)
     assert not window.filter_bar.isVisible()  # nothing to filter yet
-    window.add_source(photos_dir)
+    window.source_actions.add_source(photos_dir)
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     assert window.filter_bar.isVisible()
     assert len(window.photos) == 10
@@ -86,11 +86,11 @@ def test_filter_bar_drives_grid_counts_and_status(qtbot, photos_dir):
 
 def test_removing_a_filtered_source_resets_the_filter(qtbot, photos_dir):
     window, conn = open_window(qtbot)
-    source = window.add_source(photos_dir)
+    source = window.source_actions.add_source(photos_dir)
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     window.filter_bar.set_filter(db.PhotoFilter(source_ids=frozenset({source.id})))
     assert len(window.photos) == 10
-    window.remove_source(source.id)
+    window.source_actions.remove_source(source.id)
     assert window.photos == []
     assert window.current_filter().is_empty
     window.close()
@@ -100,7 +100,7 @@ def test_removing_a_filtered_source_resets_the_filter(qtbot, photos_dir):
 def test_scan_rows_follow_the_filter(qtbot, photos_dir, tmp_path):
     window, conn = open_window(qtbot)
     window.filter_bar.set_filter(db.PhotoFilter(text="city"))
-    window.add_source(photos_dir)
+    window.source_actions.add_source(photos_dir)
     qtbot.waitUntil(lambda: not window.scanning, timeout=60_000)
     assert len(window.photos) == 4
     assert all("city" in p.relative_path for p in window.photos)

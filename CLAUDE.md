@@ -24,7 +24,7 @@ Create new modules as the work needs them.
   - `takeout.py`: Takeout detection, sidecar matching and reading (PRD §8.3)
   - `cleanup/`: Takeout cleanup (PRD §8.10): `types`, `checks`, `inventory`, `planning` (pure rules), `hashing`, `copying`, `export`, and `pipeline` (the stages, run by `ui/cleanup_thread.py`). Its `__init__.py` imports nothing, so `db` can import `cleanup.types` without a cycle
   - `dates.py`: date rules (PRD §8.4), pure functions
-  - `ui/`: main window, grid, viewer, dialogs
+  - `ui/`: main window, grid, viewer, dialogs. `ui/main_window/` holds `MainWindow` (layout, menus, grid, viewer, sidebar, albums) and three controllers it owns: `window.source_actions`, `window.scan` and `window.cleanup`
   - `paths.py` (or similar): library folder resolution and the bundled-resource helper (`sys._MEIPASS`)
   - `__main__.py`: entry point. Calls `multiprocessing.freeze_support()` first.
 - `tests/`: pytest unit and integration tests. Fixtures are generated in code, not committed image files.

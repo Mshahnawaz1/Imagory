@@ -31,7 +31,7 @@ def window(qtbot, tmp_path):
     qtbot.addWidget(win)
     win.resize(900, 700)
     win.show()
-    win.add_source(src)
+    win.source_actions.add_source(src)
     qtbot.waitUntil(lambda: not win.scanning, timeout=60_000)
     qtbot.waitUntil(lambda: win.grid_source.complete, timeout=10_000)
     yield win
@@ -93,7 +93,7 @@ def test_context_menu_and_albums_menu(window):
     window.show_album(next(a for a in db.list_albums(window.conn) if a.id == album_id))
     texts = [a.text() for a in window.build_grid_menu().actions()]
     assert texts == ["Add to album…", "Remove from album"]
-    window._fill_albums_menu()
+    window.fill_albums_menu()
     assert any(a.text().startswith("Trip") and a.isChecked() for a in window.albums_menu.actions())
 
 
@@ -102,10 +102,10 @@ def test_album_actions_are_disabled_while_scanning(window, monkeypatch):
     assert window.add_to_album_action.isEnabled()
     assert window.manage_albums_action.isEnabled()
     monkeypatch.setattr(mw.MainWindow, "scanning", property(lambda self: True))
-    window._update_actions()
+    window.update_actions()
     assert not window.add_to_album_action.isEnabled()
     assert not window.remove_from_album_action.isEnabled()
     assert not window.manage_albums_action.isEnabled()
     monkeypatch.undo()
-    window._update_actions()
+    window.update_actions()
     assert window.add_to_album_action.isEnabled()
