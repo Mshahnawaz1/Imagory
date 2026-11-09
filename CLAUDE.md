@@ -16,7 +16,7 @@ Imagory is an offline Windows desktop app (Python 3.12, PySide6, SQLite) for bro
 ## Project structure
 Create new modules as the work needs them.
 - `imagory/` is the application package, one module per job (PRD §6.1):
-  - `db.py`: connection setup (WAL, `foreign_keys=ON`, `synchronous=NORMAL`), migrations, **all SQL**
+  - `db/`: **all SQL**, one module per area (`connection`, `schema`, `sources`, `files`, `photos`, `grid`, `albums`, `people`, `photo_info`, `cleanup`, `cleaned`, `settings`). `imagory/db/__init__.py` re-exports every public name, so callers write `from imagory import db` and `db.<name>`
   - `scanner.py`: walk, diff, queue work, apply results
   - `metadata.py`: dimensions, format, EXIF date and orientation
   - `thumbs.py`: generating and locating cached thumbnails
@@ -32,7 +32,7 @@ Create new modules as the work needs them.
 
 ## Architecture rules
 - **Threads (PRD §6.2):** the main thread runs Qt UI only. One scan coordinator `QThread` is the **only database writer** during a scan, committing about 200 files per transaction. Worker processes (`ProcessPoolExecutor`, CPU count minus one) read metadata and make thumbnails in one pass, return plain picklable results, and **never touch the database**. Thumbnails for the grid load through a `QThreadPool` with a size-limited memory cache.
-- The UI never touches files or the database directly during a scan. Keep SQL in `db.py`.
+- The UI never touches files or the database directly during a scan. Keep SQL in `imagory/db/`.
 - **Scan pipeline (PRD §6.3):** walk (`os.scandir`, no file opens), diff against `files`, process new and changed files, apply, mark missing, record `scan_runs`. Cancel and resume need no saved state, so keep it that way.
 - **Walk rules (PRD §7.2):** don't follow symlinks or junctions. Skip dirs starting with `.` or `$` and `System Volume Information`, and skip the library folder if it sits inside the source. Extensions are matched case-insensitively: `.jpg .jpeg .png .gif .heic .heif`.
 - One bad image must never stop a scan. Log it, count it as an error, and move on.

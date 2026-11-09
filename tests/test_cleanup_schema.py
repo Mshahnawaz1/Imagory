@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from imagory import db
+from imagory.cleanup_types import ExportAlbum, ExportOrigin, ExportRun
 from tests.db_helpers import album_ids_of
 
 NEW_TABLES = ("cleanup_runs", "file_origins", "extra_files", "cleanup_copies")
@@ -316,8 +317,8 @@ def test_finalise_creates_albums_from_origins(out):
     assert albums["trip"].photo_count == 1  # the failed c.jpg is not a member
 
     assert db.export_albums(conn, cleaned) == [
-        db.ExportAlbum("Archive", ("2019/07/a.jpg",)),
-        db.ExportAlbum("Trip", ("2019/07/a.jpg", "2019/07/v.mp4")),
+        ExportAlbum("Archive", ("2019/07/a.jpg",)),
+        ExportAlbum("Trip", ("2019/07/a.jpg", "2019/07/v.mp4")),
     ]
     assert db.export_albums(conn, cleaned, run_id=run) == db.export_albums(conn, cleaned)
     assert db.export_albums(conn, cleaned, run_id=run + 1) == []
@@ -346,9 +347,9 @@ def test_export_files_and_runs(out):
     )
     assert a.uploaded_at_utc == "2019-07-05T00:00:00Z"
     assert a.origins == (
-        db.ExportOrigin(run, "Archive/a(1).jpg", None, "Archive"),
-        db.ExportOrigin(run, "Photos from 2019/a.jpg", "Photos from 2019/a.jpg.json", None),
-        db.ExportOrigin(run, "Trip/a.jpg", "Trip/a.jpg.json", "Trip"),
+        ExportOrigin(run, "Archive/a(1).jpg", None, "Archive"),
+        ExportOrigin(run, "Photos from 2019/a.jpg", "Photos from 2019/a.jpg.json", None),
+        ExportOrigin(run, "Trip/a.jpg", "Trip/a.jpg.json", "Trip"),
     )
     assert (b.taken_at_local, b.taken_at_utc, b.date_source) == (None, None, None)
     assert (v.width, v.format, v.content_hash, v.people) == (None, None, "hv", ("Ben",))
@@ -356,7 +357,7 @@ def test_export_files_and_runs(out):
 
     (exported,) = db.export_runs(conn)
     finished = db.get_run(conn, run)
-    assert exported == db.ExportRun(
+    assert exported == ExportRun(
         run, "/in/Takeout", finished.started_at, finished.finished_at, finished.counts
     )
     assert exported.counts["photos"] == 2

@@ -228,7 +228,7 @@ def test_bad_dates_raise(conn):
 def test_no_sort_step_without_text(conn, lib):
     """Without text the walk is in taken_at_local order, so a LIMIT can stop early."""
     for f in (PhotoFilter(), PhotoFilter(date_from="2000-01-01"), PhotoFilter(has_duplicates=True)):
-        sql, params = db._filter_sql(f, ordered=True)
+        sql, params = db.grid._filter_sql(f, ordered=True)
         order = "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT 200"
         query = f"EXPLAIN QUERY PLAN SELECT p.id {sql} {order}"
         plan = " ".join(r[3] for r in conn.execute(query, params))

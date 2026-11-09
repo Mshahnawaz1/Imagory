@@ -73,7 +73,7 @@ The code is split into small modules with one job each. The UI never touches fil
 
 | Module | Responsibility |
 | --- | --- |
-| `db` | Connection setup (WAL, foreign keys), schema migrations, all SQL queries |
+| `db` | A package holding connection setup (WAL, foreign keys), the schema and migrations, and all SQL queries, one module per area; `imagory.db` re-exports every public name |
 | `scanner` | Walks a source, compares it to the database, queues work, applies results |
 | `metadata` | Reads dimensions, format, EXIF date, GPS, orientation; parses dates from filenames |
 | `takeout` | Detects Takeout sources, finds and parses JSON sidecars |
@@ -506,6 +506,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Fake Takeout cleanup cases | Opt-in (`make_fake_library.py --takeout --cleanup`), so the existing `--takeout` output and manifest don't change; `manifest["cleanup"]` is the ground truth. `--second-account` makes a second export sharing and clashing with the first |
 | Linux build | Added for 0.2 at the author's request (2026-11-07), reversing "other platforms not in scope" for Linux x86_64 only. Same PyInstaller spec and code, no Linux-only features; built on Ubuntu 22.04 for the widest glibc reach; Windows stays the main target and the one the section 7.5 checks cover |
 | Editable people | Not in V1: people from Takeout are read-only. Planned for V1.x and flagged as needing planning (section 14). Considered and rejected: storing people as albums, because a rescan would undo manual edits (scans touch people but never albums) |
+| `db` package (2026-11-09) | `db.py` (2,700 lines) split into `imagory/db/`, one module per area, for readability. `imagory.db` re-exports every public name, so call sites are unchanged and "all SQL in one place" now means the package. Helpers shared between modules keep their leading underscore and are imported explicitly |
 
 ## 17. Risks
 

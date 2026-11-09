@@ -20,7 +20,7 @@ subgraph group_scan["Scanning and metadata"]
 end
 
 subgraph group_library["Library state"]
-  node_database[("Library database<br/>[db.py]")]
+  node_database[("Library database<br/>[db/]")]
   node_library_paths["Library paths<br/>[paths.py]"]
   node_thumbnail_cache[("Thumbnail cache<br/>[thumbs.py]")]
 end
@@ -82,7 +82,7 @@ click node_file_processing "https://github.com/mshahnawaz1/imagory/blob/main/ima
 click node_metadata "https://github.com/mshahnawaz1/imagory/blob/main/imagory/metadata.py"
 click node_dates "https://github.com/mshahnawaz1/imagory/blob/main/imagory/dates.py"
 click node_sources "https://github.com/mshahnawaz1/imagory/blob/main/imagory/sources.py"
-click node_database "https://github.com/mshahnawaz1/imagory/blob/main/imagory/db.py"
+click node_database "https://github.com/mshahnawaz1/imagory/tree/main/imagory/db"
 click node_library_paths "https://github.com/mshahnawaz1/imagory/blob/main/imagory/paths.py"
 click node_thumbnail_cache "https://github.com/mshahnawaz1/imagory/blob/main/imagory/thumbs.py"
 click node_grid_data "https://github.com/mshahnawaz1/imagory/blob/main/imagory/ui/grid.py"

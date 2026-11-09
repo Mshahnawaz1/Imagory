@@ -46,8 +46,8 @@ def test_backup_before_migrating_existing_db(tmp_path, monkeypatch):
     def _migration_next(c):
         c.execute("CREATE TABLE extra (x INTEGER)")
 
-    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, _migration_next])
-    monkeypatch.setattr(db, "SCHEMA_VERSION", current + 1)
+    monkeypatch.setattr(db.schema, "MIGRATIONS", [*db.MIGRATIONS, _migration_next])
+    monkeypatch.setattr(db.schema, "SCHEMA_VERSION", current + 1)
     conn = db.open_database(path)
     assert db.schema_version(conn) == current + 1
     conn.close()
@@ -67,8 +67,8 @@ def test_failed_migration_rolls_back(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     current = db.SCHEMA_VERSION
-    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, _bad])
-    monkeypatch.setattr(db, "SCHEMA_VERSION", current + 1)
+    monkeypatch.setattr(db.schema, "MIGRATIONS", [*db.MIGRATIONS, _bad])
+    monkeypatch.setattr(db.schema, "SCHEMA_VERSION", current + 1)
     with pytest.raises(RuntimeError):
         db.open_database(path)
     conn = db.connect(path)
