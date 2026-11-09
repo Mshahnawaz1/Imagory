@@ -1,4 +1,4 @@
-"""The Takeout cleanup wizard (docs/takeout-cleanup-plan.md, UI section).
+"""The Takeout cleanup wizard (docs/takeout-cleanup.md, UI section).
 
 A non-modal window with six pages: input, output, analyse, preview, copy, done. It never calls the
 pipeline, the database or the file system itself: folder pickers only return paths, checks are

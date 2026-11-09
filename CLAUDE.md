@@ -82,3 +82,5 @@ Create new modules as the work needs them.
 ## Keeping docs in sync
 - If a change alters scope, architecture, the schema, or a decision, update `PRD.md` (including the decisions log in §16) in the same change, or flag the mismatch.
 - Update `README.md` when user-facing behaviour, setup, or build steps change. The README must state the offline/privacy promise prominently (PRD §11).
+- Use the terms in `GLOSSARY.md` (File, Photo, Primary file, Copy, …). When a new domain term settles, add it there; it holds definitions only, no implementation details.
+- Live docs are `PRD.md`, `GLOSSARY.md`, `README.md` and `docs/` (`tasks.md`, `setup.md` for builds, `takeout-cleanup.md`, `architecture.md`). Finished plans, agent notes and work logs go to `docs/archive/` and are not kept up to date.

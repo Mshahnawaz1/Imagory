@@ -12,7 +12,7 @@ from imagory.dates import SOURCE_RANK, DateResult, best_photo_date
 from imagory.db.connection import transaction, utc_now
 from imagory.db.photos import _photo_ids_of, refresh_photos
 
-# Takeout cleanup (PRD §8.10, docs/takeout-cleanup-plan.md). Used only in a cleanup output
+# Takeout cleanup (PRD §8.10, docs/takeout-cleanup.md). Used only in a cleanup output
 # database (``<output>/.imagory/imagory.db``), whose single writer is the cleanup thread. The
 # input is scanned into a temporary ``takeout`` source; :func:`finalise_run` moves the kept
 # rows to the output's ``cleaned`` source and deletes the rest. Origins and copies always

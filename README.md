@@ -98,7 +98,7 @@ on Linux (or `$XDG_DATA_HOME/imagory`). It contains `imagory.db` (the database),
 folder** opens the logs, for example to attach them to a GitHub issue. Logs are never sent
 anywhere.
 
-A library created by the early V0 test build is not carried over: Imagory starts with an
+A library created by a development build older than 0.2.0 is not carried over: Imagory starts with an
 empty library and you add your folders again. Your photos are not affected.
 
 ### Running on Linux
@@ -145,7 +145,7 @@ uv run python scripts/make_fake_library.py .fake-library --count 100000
 IMAGORY_LIBRARY=.bench-library uv run python scripts/bench.py .fake-library
 ```
 
-Results are recorded in [docs/v0-results.md](docs/v0-results.md).
+Results are recorded in [docs/archive/v0-results.md](docs/archive/v0-results.md).
 
 A synthetic Google Takeout export, with JSON sidecars using Takeout's naming quirks and a
 ground-truth `manifest.json`:
@@ -167,9 +167,11 @@ uv run python scripts/grid_prototype.py          # interactive window
 uv run python scripts/grid_prototype.py --bench  # print timings
 ```
 
-### Building the Windows executable
+### Building the executables
 
-Run on Windows (not WSL):
+Full steps for Windows and Linux, local and in GitHub Actions, are in
+[docs/setup.md](docs/setup.md). In short, on the target system (Windows builds must run on
+Windows, not WSL):
 
 ```sh
 uv sync
@@ -177,11 +179,19 @@ uv run python scripts/collect_licenses.py   # refresh THIRD_PARTY_LICENSES.txt
 uv run pyinstaller --noconfirm --clean imagory.spec
 ```
 
-The result is `dist\Imagory.exe`, a single file.
+The result is `dist\Imagory.exe` on Windows and `dist/Imagory` on Linux, a single file each.
+Release builds come from GitHub Actions (**Windows build** and **Linux build**, run by hand);
+the Linux one is built on Ubuntu 22.04 so it also runs on older distros.
 
-The same command on Linux builds `dist/Imagory`. Release builds of both come from GitHub
-Actions (**Windows build** and **Linux build**, run by hand); the Linux one is built on
-Ubuntu 22.04 so it also runs on older distros.
+## Documentation
+
+- [PRD.md](PRD.md): scope, architecture, data model and the decisions log
+- [GLOSSARY.md](GLOSSARY.md): the terms used in the code and docs
+- [docs/architecture.md](docs/architecture.md): a diagram of the components
+- [docs/takeout-cleanup.md](docs/takeout-cleanup.md): the Takeout cleanup design
+- [docs/tasks.md](docs/tasks.md): open work and what is done
+- [docs/setup.md](docs/setup.md): building on Windows and Linux
+- [docs/archive/](docs/archive/): finished plans, agent notes and work logs, kept for history
 
 ## Licence
 

@@ -1,4 +1,4 @@
-"""Shared types for Takeout cleanup (docs/takeout-cleanup-plan.md).
+"""Shared types for Takeout cleanup (docs/takeout-cleanup.md).
 
 Plain frozen dataclasses with no logic, shared by the planner, the copy step, the export writers,
 the pipeline and the wizard. Paths are ``/``-separated relative strings (PRD §9) unless typed as

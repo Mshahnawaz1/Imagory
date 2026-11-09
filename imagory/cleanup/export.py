@@ -90,7 +90,7 @@ def write_metadata_json(
     files: Sequence[ExportFile],
     generated_at: str,
 ) -> None:
-    """Write the cleanup ``metadata.json`` (format in docs/takeout-cleanup-plan.md)."""
+    """Write the cleanup ``metadata.json`` (format in docs/takeout-cleanup.md)."""
     document: dict[str, Any] = {
         "format": METADATA_FORMAT,
         "version": METADATA_VERSION,

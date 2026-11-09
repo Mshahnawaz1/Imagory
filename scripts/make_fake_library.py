@@ -629,7 +629,7 @@ def make_takeout(
 
 # --- Takeout cleanup fixtures (opt-in: --cleanup) ----------------------------------------------
 #
-# Extra cases for the Takeout cleanup feature (docs/takeout-cleanup-plan.md). They are added
+# Extra cases for the Takeout cleanup feature (docs/takeout-cleanup.md). They are added
 # after the normal export is complete and use their own random stream, so every file and every
 # existing manifest field is identical with or without ``cleanup=True``. The new photos are
 # deliberately NOT added to ``manifest["images"]`` (older tests compare it with the files on

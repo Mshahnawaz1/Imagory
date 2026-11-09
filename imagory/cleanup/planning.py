@@ -1,4 +1,4 @@
-"""Pure planning for Takeout cleanup (PRD §8.10, docs/takeout-cleanup-plan.md).
+"""Pure planning for Takeout cleanup (PRD §8.10, docs/takeout-cleanup.md).
 
 Decides which copy of each photo is kept and where it goes in the output folder, with Windows-safe,
 clash-free, length-limited names. No Qt, no SQL and no file I/O: everything here takes plain values

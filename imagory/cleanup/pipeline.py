@@ -1,4 +1,4 @@
-"""Takeout cleanup pipeline (PRD §8.10, docs/takeout-cleanup-plan.md, stages 1 to 7).
+"""Takeout cleanup pipeline (PRD §8.10, docs/takeout-cleanup.md, stages 1 to 7).
 
 Ties together the folder checks (:mod:`.checks`), the inventory (:mod:`.inventory`), the
 planner (:mod:`.planning`), the copy primitive (:mod:`.copying`), the export writers

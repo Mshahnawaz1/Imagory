@@ -44,7 +44,7 @@ The feature is merged (see Completed). Still to check on real Windows, not WSL:
 - [x] Metadata, date fallback, and thumbnails (`metadata.py`, `thumbs.py`)
 - [x] Scan coordinator: worker pool, batched commits, progress, cancel and resume
 - [x] UI: main window, scan thread, thumbnail grid, viewer, reopen from the database
-- [x] Fake library generator, benchmark, and 100k results (`docs/v0-results.md`)
+- [x] Fake library generator, benchmark, and 100k results (`docs/archive/v0-results.md`)
 - [x] PyInstaller spec and third-party licences (validated on Linux)
 - [x] README and PRD kept in sync
 
@@ -53,9 +53,9 @@ The feature is merged (see Completed). Still to check on real Windows, not WSL:
 - [x] §8.6 virtualized grid prototype with month headers, selection, and a 100k benchmark (`ui/photo_grid.py`)
 - [x] Synthetic Takeout export with all sidecar quirks and a ground-truth manifest (`make_fake_library.py --takeout`)
 - [x] PRD and README updated for the three items above
-- [x] §8.1 Sources: source type and detection, rename, relocate, remove, per-source thumbnails, multi-source scan, Add source and Sources dialogs, grid crash fix (`docs/issues.md` issue 1)
+- [x] §8.1 Sources: source type and detection, rename, relocate, remove, per-source thumbnails, multi-source scan, Add source and Sources dialogs, grid crash fix (`docs/archive/issues.md` issue 1)
   - deferred: recompute dates on type change (wave 2); album memberships now go with removed photos (cascade)
-- [x] Wave 1 (five parallel agents, `docs/v1-agents.md`):
+- [x] Wave 1 (five parallel agents, `docs/archive/v1-agents.md`):
   - §8.5 duplicates: BLAKE2b in the worker, photo identity by hash, primary file, thumbnails keyed by hash (migration 3); V0 databases are replaced instead of migrated
   - §8.2 moved-file detection, missing-photo rule, "Remove missing…" per source
   - §8.4 dates wired into the scan for plain folders (EXIF with offset, filename, mtime, best date across copies)
@@ -69,5 +69,8 @@ The feature is merged (see Completed). Still to check on real Windows, not WSL:
   - §8.7 filter bar wired into the main window; filtered count in the status bar
   - §8.8 Albums menu, "Add to album" (toolbar and right-click), album view, "Remove from album", disabled during scans
   - §8.6 viewer zoom/pan, info panel, Show in Explorer, "Open in viewer" in the right-click menu
-- [x] People from Takeout: people, caption, favourite, upload time read from sidecars; People sidebar section, person filter and search, info panel rows (`docs/people/tasks.md`, PRD §8.9). Theme check by eye still open
-- [x] Takeout cleanup (PRD §8.10, `docs/takeout-cleanup-plan.md`, four agent waves): migration 5 and `cleaned` sources, planning, verified copy, `metadata.json` and report, fake Takeout cases, wizard, pipeline, main window wiring, benchmark (50,000 photos on WSL in about 6 minutes)
+- [x] People from Takeout: people, caption, favourite, upload time read from sidecars; People sidebar section, person filter and search, info panel rows (`docs/archive/people-tasks.md`, PRD §8.9). Theme check by eye still open
+- [x] Takeout cleanup (PRD §8.10, `docs/takeout-cleanup.md`, four agent waves): migration 5 and `cleaned` sources, planning, verified copy, `metadata.json` and report, fake Takeout cases, wizard, pipeline, main window wiring, benchmark (50,000 photos on WSL in about 6 minutes)
+
+### Maintenance
+- [x] Refactor (2026-11-09): one baseline schema instead of development migrations, dead code removed, `db/`, `cleanup/` and `ui/main_window/` packages, `GLOSSARY.md`, docs reorganised (`docs/setup.md`, `docs/takeout-cleanup.md`, `docs/archive/`)

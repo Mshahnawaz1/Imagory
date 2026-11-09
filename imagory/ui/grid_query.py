@@ -52,7 +52,7 @@ class GridQuery(QObject):
 
     Pool threads are reused rather than created and deleted per query: deleting a
     finished ``QThread`` subclass crashed now and then ("pure virtual method called",
-    see docs/issues.md).
+    see docs/archive/issues.md).
     """
 
     loaded = Signal(int, list)  # token, list[GridPhoto]
