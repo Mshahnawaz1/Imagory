@@ -6,6 +6,7 @@ import pytest
 
 from imagory import db
 from imagory.db import PhotoFilter
+from tests.db_helpers import count
 
 
 @pytest.fixture
@@ -143,7 +144,7 @@ def test_person_filter_combines_with_other_filters(conn, lib):
 def test_count_months_and_grid_agree(conn, lib):
     f = PhotoFilter(person_id=person_id(conn, "Bo_b"))
     rows = db.filtered_grid_photos(conn, f)
-    assert db.filtered_count(conn, f) == len(rows) == 2
+    assert count(conn, f) == len(rows) == 2
     assert db.filtered_month_counts(conn, f) == [("2021-01", 1), ("2020-08", 1)]
 
 

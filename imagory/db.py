@@ -1185,63 +1185,6 @@ def remove_photos_from_album(
         return conn.total_changes - before
 
 
-def albums_for_photo(conn: sqlite3.Connection, photo_id: int) -> list[int]:
-    """Ids of the albums containing a photo."""
-    return [
-        r[0]
-        for r in conn.execute(
-            "SELECT album_id FROM album_photos WHERE photo_id = ? ORDER BY album_id", (photo_id,)
-        )
-    ]
-
-
-def album_ids_for_photos(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> dict[int, set[int]]:
-    """``{album_id: {photo_ids from the given ones that are in it}}``; empty albums omitted."""
-    result: dict[int, set[int]] = {}
-    ids = list(dict.fromkeys(photo_ids))
-    for start in range(0, len(ids), 500):  # stay under SQLite's variable limit
-        chunk = ids[start : start + 500]
-        rows = conn.execute(
-            "SELECT album_id, photo_id FROM album_photos "
-            f"WHERE photo_id IN ({','.join('?' * len(chunk))})",
-            chunk,
-        )
-        for album_id, photo_id in rows:
-            result.setdefault(album_id, set()).add(photo_id)
-    return result
-
-
-def album_grid_photos(
-    conn: sqlite3.Connection, album_id: int, limit: int | None = None, offset: int = 0
-) -> list[GridPhoto]:
-    """Visible photos of one album, with the columns and order of :func:`grid_photos`."""
-    cur = conn.cursor()
-    cur.row_factory = None
-    cur.execute(
-        "SELECT p.id, f.source_id, f.relative_path, p.width, p.height, p.format, "
-        "p.taken_at_local, p.date_source, p.content_hash FROM album_photos ap "
-        "JOIN photos p ON p.id = ap.photo_id CROSS JOIN files f "
-        "ON f.id = p.primary_file_id WHERE ap.album_id = ? AND f.status = 'ok' "
-        "ORDER BY p.taken_at_local DESC, f.relative_path, f.source_id LIMIT ? OFFSET ?",
-        (album_id, -1 if limit is None else limit, offset),
-    )
-    return list(map(GridPhoto._make, cur))
-
-
-def album_month_counts(conn: sqlite3.Connection, album_id: int) -> list[tuple[str | None, int]]:
-    """``("YYYY-MM", n)`` newest first, then ``(None, n)`` for unknown dates, over the same
-    rows as :func:`album_grid_photos`."""
-    rows = conn.execute(
-        "SELECT substr(p.taken_at_local, 1, 7) AS month, COUNT(*) FROM album_photos ap "
-        "JOIN photos p ON p.id = ap.photo_id JOIN files f ON f.id = p.primary_file_id "
-        "WHERE ap.album_id = ? AND f.status = 'ok' GROUP BY month ORDER BY month DESC",
-        (album_id,),
-    ).fetchall()
-    dated = [(m, n) for m, n in rows if m is not None]
-    undated = [(None, n) for m, n in rows if m is None]
-    return dated + undated
-
-
 # --- search and filters -----------------------------------------------------------------
 
 
@@ -1385,11 +1328,6 @@ def filtered_month_counts(conn: sqlite3.Connection, f: PhotoFilter) -> list[tupl
     dated = sorted(((m, n) for m, n in rows if m is not None), reverse=True)
     unknown = sum(n for m, n in rows if m is None)
     return [*dated, (None, unknown)] if unknown else dated
-
-
-def filtered_count(conn: sqlite3.Connection, f: PhotoFilter) -> int:
-    sql, params = _filter_sql(f)
-    return conn.execute(f"SELECT COUNT(*) {sql}", params).fetchone()[0]
 
 
 def folder_paths(conn: sqlite3.Connection, source_id: int) -> list[str]:
@@ -1553,19 +1491,6 @@ def list_runs(conn: sqlite3.Connection) -> list[CleanupRun]:
     """Every run, oldest first."""
     rows = conn.execute(f"SELECT {_RUN_COLUMNS} FROM cleanup_runs ORDER BY id")
     return [_cleanup_run(r) for r in rows]
-
-
-def resumable_run(conn: sqlite3.Connection, input_path: str) -> CleanupRun | None:
-    """The latest unfinished run (any status but ``done``) for this input, if any.
-
-    ``input_path`` is compared case-insensitively (ASCII only, like other paths here).
-    """
-    row = conn.execute(
-        f"SELECT {_RUN_COLUMNS} FROM cleanup_runs WHERE input_path = ? AND status <> 'done' "
-        "ORDER BY id DESC LIMIT 1",
-        (input_path,),
-    ).fetchone()
-    return _cleanup_run(row) if row else None
 
 
 def set_run_status(conn: sqlite3.Connection, run_id: int, status: str) -> None:
@@ -1832,10 +1757,6 @@ def list_copies(
         sql += " AND status = ?"
         params = (run_id, status)
     return [CleanupCopy(*r) for r in conn.execute(sql + " ORDER BY id", params)]
-
-
-def pending_copies(conn: sqlite3.Connection, run_id: int) -> list[CleanupCopy]:
-    return list_copies(conn, run_id, "pending")
 
 
 def copy_targets(conn: sqlite3.Connection) -> list[str]:

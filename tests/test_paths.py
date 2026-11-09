@@ -39,7 +39,6 @@ def test_cleanup_path_helpers_exact_results(tmp_path):
     assert paths.cleanup_db_path(out) == out / ".imagory" / "imagory.db"
     assert paths.cleanup_thumbs_dir(out) == out / ".imagory" / "thumbs"
     assert paths.cleanup_reports_dir(out) == out / ".imagory" / "reports"
-    assert paths.cleanup_json_dir(out) == out / ".imagory" / "takeout-json"
     assert paths.metadata_json_path(out) == out / ".imagory" / "metadata.json"
 
 
@@ -49,6 +48,5 @@ def test_cleanup_path_helpers_create_nothing(tmp_path):
     paths.cleanup_db_path(out)
     paths.cleanup_thumbs_dir(out)
     paths.cleanup_reports_dir(out)
-    paths.cleanup_json_dir(out)
     paths.metadata_json_path(out)
     assert not out.exists()

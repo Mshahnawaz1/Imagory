@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from imagory import db
+from tests.db_helpers import album_ids_of
 
 NEW_TABLES = ("cleanup_runs", "file_origins", "extra_files", "cleanup_copies")
 NEW_INDEXES = (
@@ -80,11 +81,9 @@ def test_runs_create_resume_status_and_counts(out):
         None,
     )
     assert run.counts == dict.fromkeys(db.RUN_COUNT_FIELDS, 0)
-    assert db.resumable_run(conn, "d:/takeout").id == first  # case-insensitive
-    assert db.resumable_run(conn, "D:/Other") is None
 
     db.set_run_status(conn, first, "cancelled")
-    assert db.resumable_run(conn, "D:/Takeout").status == "cancelled"
+    assert db.get_run(conn, first).status == "cancelled"
     with pytest.raises(ValueError):
         db.set_run_status(conn, first, "done")  # only finalise_run finishes a run
     with pytest.raises(ValueError):
@@ -95,7 +94,6 @@ def test_runs_create_resume_status_and_counts(out):
     with pytest.raises(ValueError):
         db.set_run_counts(conn, first, {"photos; DROP TABLE files": 1})
     second = db.create_run(conn, "D:/Takeout", "Takeout")
-    assert db.resumable_run(conn, "D:/Takeout").id == second
     assert [r.id for r in db.list_runs(conn)] == [first, second]
     assert db.get_run(conn, 999) is None
 
@@ -150,13 +148,13 @@ def test_copies_lifecycle_and_unique_targets(out):
         db.insert_copies(conn, other, [db.CopyRecord("x.jpg", "2019/07/A.JPG", a)])
     assert sorted(db.copy_targets(conn)) == ["2019/07/a.jpg", "2019/07/b.jpg"]
 
-    first, second = (c.id for c in db.pending_copies(conn, run))
+    first, second = (c.id for c in db.list_copies(conn, run, "pending"))
     db.mark_copy_done(conn, first)
     db.mark_copy_error(conn, second, "disk full")
-    assert db.pending_copies(conn, run) == []
+    assert db.list_copies(conn, run, "pending") == []
     assert [c.error for c in db.list_copies(conn, run, "error")] == ["disk full"]
     db.reset_copy(conn, second)
-    assert [(c.id, c.error) for c in db.pending_copies(conn, run)] == [(second, None)]
+    assert [(c.id, c.error) for c in db.list_copies(conn, run, "pending")] == [(second, None)]
     assert [c.id for c in db.list_copies(conn, run, "done")] == [first]
 
 
@@ -314,7 +312,7 @@ def test_finalise_creates_albums_from_origins(out):
     assert set(albums) == {"trip", "archive"}
     assert albums["trip"].id == existing
     photo_a = _photo_of(conn, ids["kept"])
-    assert db.albums_for_photo(conn, photo_a) == sorted(a.id for a in albums.values())
+    assert album_ids_of(conn, photo_a) == sorted(a.id for a in albums.values())
     assert albums["trip"].photo_count == 1  # the failed c.jpg is not a member
 
     assert db.export_albums(conn, cleaned) == [
@@ -409,7 +407,7 @@ def test_kept_file_takes_the_best_date_of_its_duplicates(out):
         [db.OriginRecord("Photos from 2019/a.jpg", kept), db.OriginRecord("Trip/a.jpg", kept)],
     )
     db.insert_copies(conn, run, [db.CopyRecord("Photos from 2019/a.jpg", "2019/07/a.jpg", kept)])
-    (copy,) = db.pending_copies(conn, run)
+    (copy,) = db.list_copies(conn, run, "pending")
     db.mark_copy_done(conn, copy.id)
     db.finalise_run(conn, run, temp, cleaned, {copy.id: (10, 20)})
     row = conn.execute("SELECT taken_at_local, date_source FROM files WHERE id = ?", (kept,))
@@ -438,7 +436,7 @@ def test_second_run_merges_into_existing_output(out):
         ],
     )
     db.insert_copies(conn, run2, [db.CopyRecord("Photos from 2021/d.jpg", "2021/01/d.jpg", new)])
-    (copy,) = db.pending_copies(conn, run2)
+    (copy,) = db.list_copies(conn, run2, "pending")
     db.mark_copy_done(conn, copy.id)
     result = db.finalise_run(conn, run2, temp2, cleaned, {copy.id: (1, 2)})
     assert (result.files_moved, result.albums_created, result.leftover_rows_deleted) == (1, 0, 1)

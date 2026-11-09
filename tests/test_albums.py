@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox  # noqa: E402
 
 from imagory import db  # noqa: E402
 from imagory.ui import albums as ui  # noqa: E402
+from tests.db_helpers import album_ids_of, album_photos  # noqa: E402
 
 NOW = "2024-01-01T00:00:00Z"
 
@@ -60,18 +61,16 @@ def test_add_is_idempotent_and_remove(conn, src):
     assert db.list_albums(conn)[0].photo_count == 3
     assert db.remove_photos_from_album(conn, album, [p1, p1, 999]) == 1
     assert db.remove_photos_from_album(conn, album, [p1]) == 0
-    assert {p.photo_id for p in db.album_grid_photos(conn, album)} == {p2, p3}
+    assert {p.photo_id for p in album_photos(conn, album)} == {p2, p3}
 
 
-def test_albums_for_photo(conn, src):
+def test_album_membership(conn, src):
     p1, p2 = add_photo(conn, src.id, "a.jpg"), add_photo(conn, src.id, "b.jpg")
     a, b = db.create_album(conn, "A"), db.create_album(conn, "B")
     db.add_photos_to_album(conn, a, [p1, p2])
     db.add_photos_to_album(conn, b, [p1])
-    assert db.albums_for_photo(conn, p1) == [a, b]
-    assert db.albums_for_photo(conn, p2) == [a]
-    assert db.album_ids_for_photos(conn, [p1, p2]) == {a: {p1, p2}, b: {p1}}
-    assert db.album_ids_for_photos(conn, []) == {}
+    assert album_ids_of(conn, p1) == [a, b]
+    assert album_ids_of(conn, p2) == [a]
 
 
 def test_delete_album_keeps_photos(conn, src):
@@ -91,7 +90,7 @@ def test_delete_photo_removes_memberships_only(conn, src):
     with db.transaction(conn):
         conn.execute("UPDATE files SET photo_id = NULL WHERE photo_id = ?", (p1,))
         conn.execute("DELETE FROM photos WHERE id = ?", (p1,))
-    assert [x.photo_id for x in db.album_grid_photos(conn, album)] == [p2]
+    assert [x.photo_id for x in album_photos(conn, album)] == [p2]
     assert len(db.list_albums(conn)) == 1
 
 
@@ -129,13 +128,13 @@ def test_album_grid_order_and_missing(conn, src):
     with db.transaction(conn):
         conn.execute("UPDATE files SET status = 'missing' WHERE photo_id = ?", (gone,))
 
-    rows = db.album_grid_photos(conn, album)
+    rows = album_photos(conn, album)
     assert [r.photo_id for r in rows] == [new, old_a, old_b]
     assert other not in [r.photo_id for r in rows]
     # Same columns and order as the library grid, restricted to the album.
     expected = [r for r in db.grid_photos(conn) if r.photo_id in {new, old_a, old_b}]
     assert rows == expected
-    assert db.album_grid_photos(conn, album, limit=1, offset=1) == rows[1:2]
+    assert album_photos(conn, album, limit=1, offset=1) == rows[1:2]
     assert db.list_albums(conn)[0].photo_count == 3  # missing photo not counted
 
 
@@ -149,8 +148,15 @@ def test_album_month_counts(conn, src):
     ]
     album = db.create_album(conn, "A")
     db.add_photos_to_album(conn, album, ids[:4])
-    assert db.album_month_counts(conn, album) == [("2024-06", 2), ("2023-12", 1), (None, 1)]
-    assert db.album_month_counts(conn, db.create_album(conn, "Empty")) == []
+    assert db.filtered_month_counts(conn, db.PhotoFilter(album_id=album)) == [
+        ("2024-06", 2),
+        ("2023-12", 1),
+        (None, 1),
+    ]
+    assert (
+        db.filtered_month_counts(conn, db.PhotoFilter(album_id=db.create_album(conn, "Empty")))
+        == []
+    )
 
 
 # --- dialogs ----------------------------------------------------------------------------
@@ -229,7 +235,7 @@ def test_add_to_album_dialog(qtbot, conn, src, prompts):
     assert (dialog.album_id, dialog.added, dialog.already_present) == (existing, 2, 1)
     assert "Added 2 photos" in prompts.messages[-1]
     assert "1 photo already" in prompts.messages[-1]
-    assert len(db.album_grid_photos(conn, existing)) == 3
+    assert len(album_photos(conn, existing)) == 3
 
     dialog = ui.AddToAlbumDialog(conn, [p1])
     qtbot.addWidget(dialog)
@@ -239,4 +245,4 @@ def test_add_to_album_dialog(qtbot, conn, src, prompts):
     dialog.accept()
     new_id = next(a.id for a in db.list_albums(conn) if a.name == "Brand new")
     assert dialog.album_id == new_id and dialog.added == 1
-    assert db.albums_for_photo(conn, p1) == [existing, new_id]
+    assert album_ids_of(conn, p1) == [existing, new_id]

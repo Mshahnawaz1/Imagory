@@ -66,11 +66,6 @@ def cleanup_reports_dir(output: Path) -> Path:
     return cleanup_dir(output) / "reports"
 
 
-def cleanup_json_dir(output: Path) -> Path:
-    """Return the folder holding unused JSON files copied from a Takeout export."""
-    return cleanup_dir(output) / "takeout-json"
-
-
 def metadata_json_path(output: Path) -> Path:
     """Return the path of the plain-text ``metadata.json`` in a cleanup output folder."""
     return cleanup_dir(output) / "metadata.json"

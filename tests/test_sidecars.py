@@ -19,7 +19,6 @@ from imagory.takeout import (
     match_directory,
     parse_sidecar,
     read_sidecar,
-    sidecar_for,
 )
 
 LONG = "a_very_long_original_filename_from_a_camera_app_2019.jpg"
@@ -139,9 +138,9 @@ def test_deterministic_regardless_of_order():
     assert m(*names) == m(*reversed(names))
 
 
-def test_sidecar_for_and_unused():
-    assert sidecar_for("A.jpg", ["a.jpg.json", "x.json"]) == "a.jpg.json"
+def test_match_is_case_insensitive_and_lists_unused():
     result = match_directory(["A.jpg", "a.jpg.json", "x.json"])
+    assert result.matches == {"A.jpg": "a.jpg.json"}
     assert result.unused_sidecars == ("x.json",)
     assert result.unmatched_images == []
     assert isinstance(result, DirectoryMatch)
@@ -252,7 +251,9 @@ def test_is_trash_dir(path, expected):
 def test_match_report_and_log(caplog):
     a = match_directory(["a.jpg", "a.jpg.json", "b.jpg", "x.json"])
     b = match_directory(["c.jpg"])
-    report = MatchReport.from_directories([("Photos from 2019", a), ("", b)])
+    report = MatchReport()
+    report.add("Photos from 2019", a)
+    report.add("", b)
     assert report.matched == 1
     assert report.unmatched_images == ["Photos from 2019/b.jpg", "c.jpg"]
     assert report.unused_sidecars == ["Photos from 2019/x.json"]
@@ -306,7 +307,9 @@ def test_matching_against_manifest(export, with_titles):
     assert any(e["quirk"] == "supplemental_truncated" for e in manifest["images"].values())
     assert any(e["edited_from"] for e in manifest["images"].values())
 
-    report = MatchReport.from_directories(results.items())
+    report = MatchReport()
+    for relative_dir, result in results.items():
+        report.add(relative_dir, result)
     assert sorted(report.unused_sidecars) == manifest["orphan_sidecars"]
 
 

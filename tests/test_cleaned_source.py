@@ -21,6 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from imagory import db, paths, sources, thumbs
 from imagory.scanner import Scanner
+from tests.db_helpers import album_ids_of
 from tests.fs_snapshot import assert_unchanged, snapshot
 from tests.imaging import make_image
 
@@ -369,45 +370,12 @@ def test_relocated_output_keeps_its_metadata(output, lib, tmp_path):
     before = snapshot(moved)
 
     source = db.get_source(conn, source.id)
-    assert sources.recompute_dates(conn, source) == 0  # still resolves through the database
     summary = scan(conn, root, source)
     assert (summary.counts.unchanged, summary.counts.missing) == (3, 0)
-    # Dates are read again from the moved database; the undated file stays undated.
-    conn.execute("UPDATE files SET taken_at_local = 'x', date_source = 'mtime'")
-    assert sources.recompute_dates(conn, source) == 3
-    assert file_row(conn, source.id, "Unknown date/scan.jpg")[2] is None
     assert file_row(conn, source.id, "2019/07/IMG_1.jpg")[4] == "takeout_json"
+    assert file_row(conn, source.id, "Unknown date/scan.jpg")[2] is None
     assert_unchanged(moved, before)
     no_side_files(moved)
-
-
-def test_recompute_dates_reads_the_output_database(output, lib):
-    root, conn = lib
-    make_image(output / "Later" / "exif.jpg", color=(50, 50, 50), taken="2021:05:05 05:05:05")
-    source = sources.add_cleaned_source(conn, output)
-    scan(conn, root, source)
-    conn.execute(
-        "UPDATE files SET taken_at_local = '1999-01-01T00:00:00', taken_at_utc = NULL, "
-        "date_source = 'mtime'"
-    )
-    before = snapshot(output)
-    assert sources.recompute_dates(conn, db.get_source(conn, source.id)) == 4
-    assert_unchanged(output, before)
-    assert tuple(file_row(conn, source.id, "2019/07/IMG_1.jpg")[2:5]) == (
-        LOCAL,
-        UTC_ISO,
-        "takeout_json",
-    )
-    assert tuple(file_row(conn, source.id, "Unknown date/scan.jpg")[2:7]) == (None,) * 5
-    assert file_row(conn, source.id, "Later/exif.jpg")[2:5] == (
-        "2021-05-05T05:05:05",
-        None,
-        "exif",
-    )
-
-    shutil.rmtree(paths.cleanup_dir(output))
-    with pytest.raises(FileNotFoundError):
-        sources.recompute_dates(conn, db.get_source(conn, source.id))
 
 
 def test_type_of_cleaned_source_cannot_change(output, lib):
@@ -660,7 +628,7 @@ def test_swap_keeps_photo_ids_dates_people_and_albums(lib, tmp_path):
         after_row = file_row(conn, cleaned.id, f"2019/07/{name}")
         assert after_row[1] == before_row[1]  # same photo id
         assert tuple(after_row[5:7]) == tuple(before_row[5:7])  # same photo date
-        assert db.albums_for_photo(conn, after_row[1]) == [favourites]
+        assert album_ids_of(conn, after_row[1]) == [favourites]
     assert db.people_for_photo(conn, ids["IMG_1.jpg"][1]) == ["Ana"]
     assert file_row(conn, cleaned.id, "2019/07/IMG_1.jpg")[7] == "Beach"
     assert_unchanged(takeout_dir, input_before)

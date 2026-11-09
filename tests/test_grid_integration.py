@@ -16,6 +16,7 @@ from imagory.ui import main_window as mw  # noqa: E402
 from imagory.ui.grid import PhotoDataSource, PhotoThumbnails, sorts_before  # noqa: E402
 from imagory.ui.grid_layout import build_sections  # noqa: E402
 from imagory.ui.photo_grid import PhotoGrid  # noqa: E402
+from tests.db_helpers import count  # noqa: E402
 from tests.imaging import make_image  # noqa: E402
 
 NOW = "2026-01-01T00:00:00Z"
@@ -218,7 +219,7 @@ def test_data_source_takes_the_filtered_queries(library_db, qtbot, f):
         counts=lambda c: db.filtered_month_counts(c, f),
     )
     assert source.photos == db.filtered_grid_photos(conn, f)
-    assert source.count() == db.filtered_count(conn, f) == len(source.photos)
+    assert source.count() == count(conn, f) == len(source.photos)
     if f == db.PhotoFilter():
         assert db.filtered_month_counts(conn, f) == db.month_counts(conn)
     source.wait()

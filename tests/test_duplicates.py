@@ -13,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # for the sources dialog 
 
 from imagory import db, paths, sources, thumbs
 from imagory.scanner import Scanner
+from tests.db_helpers import album_ids_of
 from tests.imaging import make_image
 from tests.test_scan import snapshot
 
@@ -393,4 +394,4 @@ def test_merged_photo_keeps_its_album_memberships(tmp_path, lib):
     scan(conn, source, root)
     b_photo = photo_of(conn, source.id, "b.jpg")["id"]
     assert conn.execute("SELECT 1 FROM photos WHERE id = ?", (solo,)).fetchone() is None
-    assert db.albums_for_photo(conn, b_photo) == [album]
+    assert album_ids_of(conn, b_photo) == [album]

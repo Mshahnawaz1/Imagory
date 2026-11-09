@@ -8,6 +8,7 @@ import pytest
 
 from imagory import db, paths, takeout
 from imagory.scanner import Scanner
+from tests.db_helpers import count
 from tests.imaging import make_image
 from tests.test_scan import snapshot
 
@@ -127,12 +128,12 @@ def test_person_filter_and_text_search(takeout_dir, lib):
     source = db.create_source(conn, str(takeout_dir), "T", "takeout")
     scan(conn, root, source)
     anna = next(p for p in db.list_people(conn) if p.name == "Anna")
-    assert db.filtered_count(conn, db.PhotoFilter(person_id=anna.id)) == 2
-    assert db.filtered_count(conn, db.PhotoFilter(text="chlo")) == 1  # person name
-    assert db.filtered_count(conn, db.PhotoFilter(text="beach")) == 2  # caption (+ edited copy)
-    assert db.filtered_count(conn, db.PhotoFilter(text="IMG_2")) == 1  # path still works
-    assert db.filtered_count(conn, db.PhotoFilter(text="anna", person_id=anna.id)) == 2
-    assert db.filtered_count(conn, db.PhotoFilter(text="nobody")) == 0
+    assert count(conn, db.PhotoFilter(person_id=anna.id)) == 2
+    assert count(conn, db.PhotoFilter(text="chlo")) == 1  # person name
+    assert count(conn, db.PhotoFilter(text="beach")) == 2  # caption (+ edited copy)
+    assert count(conn, db.PhotoFilter(text="IMG_2")) == 1  # path still works
+    assert count(conn, db.PhotoFilter(text="anna", person_id=anna.id)) == 2
+    assert count(conn, db.PhotoFilter(text="nobody")) == 0
 
 
 # --- parse_sidecar ---------------------------------------------------------------------

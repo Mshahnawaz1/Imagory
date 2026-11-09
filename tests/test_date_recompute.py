@@ -63,17 +63,6 @@ def test_type_change_round_trip(tmp_path, lib):
     assert snapshot(src_dir) == before
 
 
-def test_recompute_takeout_with_source_folder_gone(tmp_path, lib):
-    root, conn = lib
-    src_dir = make_source(tmp_path)
-    source = db.create_source(conn, str(src_dir), "T", "takeout")
-    Scanner(conn, source, paths.thumbs_dir(root), root, workers=2).run()
-    shutil.rmtree(src_dir)  # unplugged drive: sidecars unreadable, stored dates must stay
-    with pytest.raises(FileNotFoundError):
-        sources.recompute_dates(conn, db.get_source(conn, source.id))
-    assert file_row(conn, source, f"{YEAR}/IMG_9.jpg")[2] == "takeout_json"
-
-
 def test_type_change_to_takeout_with_folder_gone_changes_nothing(tmp_path, lib):
     root, conn = lib
     src_dir = make_source(tmp_path)

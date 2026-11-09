@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from imagory import dates, db, paths, scanner, takeout, thumbs
+from imagory import dates, db, paths, takeout, thumbs
 
 log = logging.getLogger(__name__)
 
@@ -118,29 +118,6 @@ def _list_names(folder: Path) -> list[str] | None:
             return [e.name for e in entries if e.is_file(follow_symlinks=False)]
     except OSError:
         return None
-
-
-def recompute_dates(conn: sqlite3.Connection, source: db.Source) -> int:
-    """Recompute every file date of a source from the stored inputs (PRD §8.1, §8.4): EXIF
-    time and offset, file name, modified time, and for Takeout the sidecar. Used when the
-    user changes the source type. Returns the number of files whose date changed.
-
-    A ``cleaned`` source reads its output database instead (see
-    :func:`_compute_cleaned_dates`) and raises ``FileNotFoundError`` if it is unavailable.
-
-    For a Takeout source the sidecars are matched again from the folders on disk (read
-    only). A folder that cannot be read keeps the sidecar path stored earlier. Photos are
-    not re-read, and Trash files already imported stay. The database is only written when
-    everything was computed, so a failure changes nothing.
-    """
-    if source.type == "cleaned":
-        updates = _compute_cleaned_dates(conn, source)
-    else:
-        updates = _compute_dates(conn, source)
-    with db.transaction(conn):
-        changed = db.apply_recomputed_dates(conn, source.id, updates)
-    log.info("Source %d: recomputed dates as %s, %d changed", source.id, source.type, changed)
-    return changed
 
 
 def _compute_dates(conn: sqlite3.Connection, source: db.Source) -> list[db.RecomputedDate]:
@@ -448,38 +425,3 @@ def swap_source(
         raise ValueError("The cleaned source has not been scanned since the cleanup finished")
     remove_source(conn, thumbs_root, old_source_id)
     log.info("Swapped source %d for cleaned source %d", old_source_id, cleaned_source_id)
-
-
-def _compute_cleaned_dates(conn: sqlite3.Connection, source: db.Source) -> list[db.RecomputedDate]:
-    """Recomputed dates of a cleaned source, matched as a scan matches them
-    (:meth:`scanner.OutputMetadata.confirmed`): a confirmed file takes the stored date and
-    location, which may be no date at all; any other file follows the plain-folder rules.
-    Reads only.
-
-    Unlike a scan, a missing folder or output database raises ``FileNotFoundError``: a
-    recompute rewrites every file's date, so falling back to the plain rules would turn
-    every stored Takeout date (and every undated file) into a file-time date at once.
-    """
-    root = Path(source.root_path)
-    if not root.is_dir() or not paths.cleanup_db_path(root).is_file():
-        raise FileNotFoundError(f"Cleanup output database not found in {root}")
-    output = scanner.load_output_metadata(root)
-    updates: list[db.RecomputedDate] = []
-    for row in db.date_inputs(conn, source.id):
-        meta = output.confirmed(row.relative_path, row.content_hash)
-        if meta is not None:
-            updates.append(scanner.cleaned_date(row.id, meta))
-            continue
-        result = dates.resolve_date(
-            "plain",
-            mtime_ns=row.modified_time,
-            exif_datetime=row.exif_taken_at,
-            exif_offset=row.exif_offset,
-            filename=row.relative_path.rsplit("/", 1)[-1],
-        )
-        updates.append(
-            db.RecomputedDate(
-                row.id, result.taken_at_local, result.taken_at_utc, result.date_source, None
-            )
-        )
-    return updates

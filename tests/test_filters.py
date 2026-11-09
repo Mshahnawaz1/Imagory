@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from imagory import db  # noqa: E402
 from imagory.db import PhotoFilter  # noqa: E402
+from tests.db_helpers import count  # noqa: E402
 
 
 @pytest.fixture
@@ -96,7 +97,7 @@ def test_missing_hidden_by_default_and_only_with_flag(conn, lib):
     assert lib["alone_missing"] not in shown and lib["all_missing_dup"] not in shown
     assert lib["partly_missing"] in shown  # one copy is still ok
     assert pids(conn, PhotoFilter(missing=True)) == {lib["alone_missing"], lib["all_missing_dup"]}
-    assert db.filtered_count(conn, PhotoFilter(missing=True)) == 2
+    assert count(conn, PhotoFilter(missing=True)) == 2
 
 
 def test_missing_photo_with_unset_primary_still_listed(conn, lib):
@@ -194,7 +195,7 @@ def test_month_counts_match_rows(conn, lib):
     for f in filters:
         rows = db.filtered_grid_photos(conn, f)
         counts = db.filtered_month_counts(conn, f)
-        assert sum(n for _, n in counts) == len(rows) == db.filtered_count(conn, f)
+        assert sum(n for _, n in counts) == len(rows) == count(conn, f)
         expected: dict = {}
         for r in rows:
             m = r.taken_at_local[:7] if r.taken_at_local else None
@@ -221,7 +222,7 @@ def test_folder_paths(conn, lib):
 
 def test_bad_dates_raise(conn):
     with pytest.raises(ValueError):
-        db.filtered_count(conn, PhotoFilter(date_from="nope"))
+        db.filtered_grid_photos(conn, PhotoFilter(date_from="nope"))
 
 
 def test_no_sort_step_without_text(conn, lib):
@@ -413,10 +414,6 @@ def test_album_filter(conn, lib):
     assert pids(conn, PhotoFilter(album_id=album, missing=True)) == {lib["alone_missing"]}
     f = PhotoFilter(album_id=album, has_duplicates=True)
     assert pids(conn, f) == {lib["dup"]}
-    rows = db.filtered_grid_photos(conn, PhotoFilter(album_id=album))
-    assert rows == db.album_grid_photos(conn, album)
-    counts = db.filtered_month_counts(conn, PhotoFilter(album_id=album))
-    assert counts == db.album_month_counts(conn, album)
 
 
 def test_real_scan_with_duplicates_and_missing(tmp_path):
@@ -446,7 +443,7 @@ def test_real_scan_with_duplicates_and_missing(tmp_path):
     assert [r.relative_path for r in dup] == ["Trip/x.jpg"]
     gone = db.filtered_grid_photos(c, PhotoFilter(missing=True))
     assert [r.relative_path for r in gone] == ["gone.jpg"]
-    assert db.filtered_count(c, PhotoFilter(folder=(sb.id, "copy"))) == 1
+    assert count(c, PhotoFilter(folder=(sb.id, "copy"))) == 1
     c.close()
 
 

@@ -315,15 +315,6 @@ def match_directory(
     return DirectoryMatch(result, unused)
 
 
-def sidecar_for(
-    image_name: str,
-    json_names: Iterable[str],
-    read_title: Callable[[str], str | None] | None = None,
-) -> str | None:
-    """The sidecar of one image among ``json_names`` (convenience over ``match_directory``)."""
-    return match_directory([image_name, *json_names], read_title).matches.get(image_name)
-
-
 class SidecarNames:
     """The JSON file names of one folder, for the detection heuristic."""
 
@@ -497,13 +488,6 @@ class MatchReport:
         self.matched += result.matched
         self.unmatched_images += [prefix + n for n in result.unmatched_images]
         self.unused_sidecars += [prefix + n for n in result.unused_sidecars]
-
-    @classmethod
-    def from_directories(cls, results: Iterable[tuple[str, DirectoryMatch]]) -> MatchReport:
-        report = cls()
-        for relative_dir, result in results:
-            report.add(relative_dir, result)
-        return report
 
 
 def log_match_report(report: MatchReport, logger: logging.Logger = log, sample: int = 10) -> None:
