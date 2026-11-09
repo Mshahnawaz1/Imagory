@@ -1,4 +1,4 @@
-"""Takeout cleanup pipeline (imagory/cleanup_run.py) on the fake Takeout's cleanup cases.
+"""Takeout cleanup pipeline (imagory/cleanup/pipeline.py) on the fake Takeout's cleanup cases.
 
 The ground truth is ``manifest["cleanup"]`` from ``scripts/make_fake_library.py --cleanup``.
 Every test that runs the pipeline asserts that the input folder is unchanged.
@@ -18,20 +18,18 @@ from pathlib import Path
 
 import pytest
 
-from imagory import cleanup, cleanup_export, dates, db, paths
-from imagory.cleanup_run import (
-    CleanupError,
-    CleanupPipeline,
-    NotEnoughSpace,
-    album_dir_of,
+from imagory import dates, db, paths
+from imagory.cleanup import export, planning
+from imagory.cleanup.checks import (
     check_folders,
     check_input,
     input_is_source,
-    match_other_files,
     storage_warning,
     unfinished_run,
 )
-from imagory.cleanup_types import CleanupReport, Rename
+from imagory.cleanup.inventory import album_dir_of, match_other_files
+from imagory.cleanup.pipeline import CleanupPipeline
+from imagory.cleanup.types import CleanupError, CleanupReport, NotEnoughSpace, Rename
 from imagory.thumbs import hash_bytes
 from tests.fs_snapshot import assert_unchanged, snapshot
 
@@ -213,7 +211,7 @@ def test_folders_follow_the_best_date(run):
         if any(truth["files"][m]["companion_of"] for m in members):
             continue  # checked in the motion pair test
         rel = by_hash[truth["groups"][gid]["hash"]]
-        assert rel.rsplit("/", 1)[0] == cleanup.target_folder(group_best(truth, gid)), rel
+        assert rel.rsplit("/", 1)[0] == planning.target_folder(group_best(truth, gid)), rel
 
 
 def test_undated_files_have_no_date_anywhere(run, out_conn):
@@ -225,12 +223,12 @@ def test_undated_files_have_no_date_anywhere(run, out_conn):
         if group_best(truth, g) is None
         and not any(truth["files"][m]["companion_of"] for m in members)
     ]
-    assert f"{cleanup.UNKNOWN_DATE_FOLDER}/clip_nodate.mp4" in undated
+    assert f"{planning.UNKNOWN_DATE_FOLDER}/clip_nodate.mp4" in undated
     cleaned = next(s for s in db.list_sources(out_conn) if s.type == "cleaned")
     rows = {r.relative_path: r for r in db.list_cleanup_files(out_conn, cleaned.id)}
     extras = {e.relative_path: e for e in db.list_extra_files(out_conn, cleaned.id)}
     for rel in undated:
-        assert rel.startswith(cleanup.UNKNOWN_DATE_FOLDER + "/")
+        assert rel.startswith(planning.UNKNOWN_DATE_FOLDER + "/")
         entry = meta[rel]
         assert (entry["taken_at_local"], entry["taken_at_utc"], entry["date_source"]) == (
             None,
@@ -252,7 +250,7 @@ def test_copies_get_their_taken_time_as_mtime(run):
         mtime = (out / rel).stat().st_mtime_ns
         best = group_best(truth, gid)
         if best is not None:
-            assert mtime == cleanup.taken_mtime_ns(best), rel
+            assert mtime == planning.taken_mtime_ns(best), rel
         else:
             sources = {(run["input"] / m).stat().st_mtime_ns for m in members}
             assert mtime in sources, rel
@@ -285,7 +283,7 @@ def test_expected_names(run):
         long_out.rsplit("/", 1)[1]
         == truth["files"][f"{YEAR04}/Scanned slides from the old shoebox in.jpg"]["title"]
     )
-    assert len(str(run["output"])) + 1 + len(long_out) <= cleanup.MAX_PATH_CHARS
+    assert len(str(run["output"])) + 1 + len(long_out) <= planning.MAX_PATH_CHARS
     # Case-only clash: the year-folder copy keeps the plain name.
     assert out(f"{YEAR04}/Case_Pair.jpg") == "2004/06/Case_Pair.jpg"
     assert out(f"{ALBUM}/case_pair.JPG") == "2004/06/case_pair (1).JPG"
@@ -296,7 +294,7 @@ def test_corrupt_jpeg_and_unused_sidecar_are_copied(run):
     corrupt = f"{YEAR04}/corrupt_cleanup.jpg"
     assert by_hash[truth["files"][corrupt]["hash"]] == "2004/09/corrupt_cleanup.jpg"
     unused = f"{YEAR04}/UNUSED_cleanup.jpg.json"
-    copy = out / cleanup.JSON_FOLDER / unused
+    copy = out / planning.JSON_FOLDER / unused
     assert copy.read_bytes() == (run["input"] / unused).read_bytes()
     report = run["done"].report_path.read_text(encoding="utf-8")
     unreadable = report.split("Unreadable files\n")[1].split("\n\n")[0]
@@ -308,9 +306,9 @@ def test_every_non_sidecar_json_is_copied(run):
     truth, out = run["truth"], run["output"]
     for rel, e in truth["files"].items():
         if e["kind"] == "json" or (e["kind"] == "sidecar" and e["sidecar_of"] is None):
-            assert (out / cleanup.JSON_FOLDER / rel).is_file(), rel
+            assert (out / planning.JSON_FOLDER / rel).is_file(), rel
         if e["kind"] == "sidecar" and e["sidecar_of"]:
-            assert not (out / cleanup.JSON_FOLDER / rel).exists(), rel
+            assert not (out / planning.JSON_FOLDER / rel).exists(), rel
 
 
 def test_albums_match_the_ground_truth(run, out_conn):
@@ -357,7 +355,7 @@ def test_output_database(run, out_conn):
     extras = [
         e
         for e in db.list_extra_files(out_conn, cleaned.id)
-        if not e.relative_path.startswith(cleanup.JSON_FOLDER)
+        if not e.relative_path.startswith(planning.JSON_FOLDER)
     ]
     assert {r.relative_path for r in rows} | {e.relative_path for e in extras} == set(run["files"])
     for r in rows:  # the copies' own size and mtime, so a rescan sees nothing changed
@@ -571,7 +569,7 @@ def test_report_writer_encoding_error_is_caught(tmp_path):
     p = CleanupPipeline(tmp_path / "in", tmp_path / "out")
     report = CleanupReport({"photos": 1}, ("bad\udcffname.jpg",), (), (), (), (), ())
     with pytest.raises(UnicodeEncodeError):
-        cleanup_export.render_report(report).encode("utf-8")
+        export.render_report(report).encode("utf-8")
     path = p._write_report(report)
     assert "bad\\udcffname.jpg" in path.read_text(encoding="utf-8")
     assert not list(path.parent.glob("*.tmp"))

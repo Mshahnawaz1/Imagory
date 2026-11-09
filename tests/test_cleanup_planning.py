@@ -1,12 +1,12 @@
-"""Planning functions for Takeout cleanup (imagory/cleanup.py): pure, no files involved."""
+"""Planning functions for Takeout cleanup (imagory/cleanup/planning.py): pure, no files involved."""
 
 from __future__ import annotations
 
 import random
 from datetime import UTC, datetime, timedelta, timezone
 
-from imagory import cleanup
-from imagory.cleanup import (
+from imagory.cleanup import planning
+from imagory.cleanup.planning import (
     build_plan,
     choose_kept,
     estimate_space,
@@ -17,7 +17,7 @@ from imagory.cleanup import (
     taken_mtime_ns,
     target_folder,
 )
-from imagory.cleanup_types import Candidate
+from imagory.cleanup.types import Candidate
 
 DATE = "2019-01-31T23:59:59"
 
@@ -424,4 +424,4 @@ def test_taken_mtime_ns_defaults_to_system_zone():
 
 
 def test_module_constants():
-    assert cleanup.MAX_PATH_CHARS == 250
+    assert planning.MAX_PATH_CHARS == 250

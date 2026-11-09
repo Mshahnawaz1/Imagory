@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from imagory.cleanup_types import DoneResult, FolderCheck, PreviewCounts
+from imagory.cleanup.types import DoneResult, FolderCheck, PreviewCounts
 
 PAGE_INPUT, PAGE_OUTPUT, PAGE_ANALYSE, PAGE_PREVIEW, PAGE_COPY, PAGE_DONE = range(6)
 

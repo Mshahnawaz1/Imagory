@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
-    from imagory.cleanup_types import DoneResult, PreviewCounts
+    from imagory.cleanup.types import DoneResult, PreviewCounts
 
 log = logging.getLogger("bench_cleanup")
 T = TypeVar("T")
@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from make_fake_library import make_takeout
 
-    from imagory.cleanup_run import CleanupPipeline
+    from imagory.cleanup.pipeline import CleanupPipeline
 
     # Generate the fake Takeout once. The generator writes manifest.json last, so a folder
     # without it is an interrupted generation and is removed before generating again.

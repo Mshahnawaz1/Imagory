@@ -23,7 +23,7 @@ import stat
 from collections.abc import Callable
 from pathlib import Path
 
-from imagory.cleanup_types import CopyResult
+from imagory.cleanup.types import CopyResult
 from imagory.thumbs import HASH_BYTES
 
 CHUNK_SIZE = 1024 * 1024

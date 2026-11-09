@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from imagory.cleanup_types import ExportAlbum, ExportFile, ExportOrigin, ExportRun
+from imagory.cleanup.types import ExportAlbum, ExportFile, ExportOrigin, ExportRun
 from imagory.dates import SOURCE_RANK, DateResult, best_photo_date
 from imagory.db.connection import transaction, utc_now
 from imagory.db.photos import _photo_ids_of, refresh_photos
@@ -730,7 +730,7 @@ def export_files(conn: sqlite3.Connection, cleaned_source_id: int) -> list[Expor
     return result
 
 
-# Pipeline helpers (imagory/cleanup_run.py, wave 2).
+# Pipeline helpers (imagory/cleanup/pipeline.py).
 
 
 @dataclass(frozen=True)

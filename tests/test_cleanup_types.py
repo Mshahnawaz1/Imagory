@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from imagory import cleanup_types as ct
+from imagory.cleanup import types as ct
 
 
 def test_all_types_are_frozen_dataclasses():

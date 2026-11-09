@@ -1,4 +1,4 @@
-"""Tests for the cleanup metadata.json and report writers (imagory/cleanup_export.py)."""
+"""Tests for the cleanup metadata.json and report writers (imagory/cleanup/export.py)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from imagory import cleanup_export
-from imagory.cleanup_export import write_metadata_json, write_report
-from imagory.cleanup_types import (
+from imagory.cleanup import export
+from imagory.cleanup.export import write_metadata_json, write_report
+from imagory.cleanup.types import (
     CleanupReport,
     ExportAlbum,
     ExportFile,
@@ -293,7 +293,7 @@ def test_metadata_failure_removes_tmp_and_keeps_old_file(tmp_path: Path, monkeyp
     def broken_replace(src, dst):
         raise OSError("disk gone")
 
-    monkeypatch.setattr(cleanup_export.os, "replace", broken_replace)
+    monkeypatch.setattr(export.os, "replace", broken_replace)
 
     with pytest.raises(OSError, match="disk gone"):
         write_metadata_json(path, [], [], [_photo()], "2026-11-07T10:00:00Z")
@@ -434,7 +434,7 @@ def test_report_failure_removes_tmp(tmp_path: Path, monkeypatch) -> None:
     def broken_replace(src, dst):
         raise OSError("locked")
 
-    monkeypatch.setattr(cleanup_export.os, "replace", broken_replace)
+    monkeypatch.setattr(export.os, "replace", broken_replace)
 
     with pytest.raises(OSError, match="locked"):
         write_report(path, _empty_report())

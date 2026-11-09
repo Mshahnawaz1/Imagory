@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from imagory.cleanup_types import DoneResult, FolderCheck, PreviewCounts  # noqa: E402
+from imagory.cleanup.types import DoneResult, FolderCheck, PreviewCounts  # noqa: E402
 from imagory.ui import cleanup_wizard as cw  # noqa: E402
 
 IN = Path("/takeout")

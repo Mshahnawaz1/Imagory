@@ -38,8 +38,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from imagory import __version__, cleanup_run, db, paths, sources
-from imagory.cleanup_types import DoneResult
+from imagory import __version__, db, paths, sources
+from imagory.cleanup import checks as cleanup_checks
+from imagory.cleanup.types import DoneResult
 from imagory.scanner import Progress, ScanSummary
 from imagory.ui.albums import AddToAlbumDialog, AlbumsDialog
 from imagory.ui.cleanup_thread import CleanupThread
@@ -1025,9 +1026,9 @@ class MainWindow(QMainWindow):
         if self.scanning:
             return
         wizard = CleanupWizard(
-            cleanup_run.check_input,
+            cleanup_checks.check_input,
             # The check runs on the main thread, on the sources it already holds.
-            lambda inp, out: cleanup_run.check_folders_for(
+            lambda inp, out: cleanup_checks.check_folders_for(
                 self.sources, self.library_root, inp, out
             ),
             self,
@@ -1070,7 +1071,7 @@ class MainWindow(QMainWindow):
             output_root,
             self.library_root,
             list(self.sources),
-            cleanup_run.input_is_source(self.conn, input_root),
+            cleanup_checks.input_is_source(self.conn, input_root),
             self.cleanup_options,
             self,
         )

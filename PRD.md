@@ -78,6 +78,7 @@ The code is split into small modules with one job each. The UI never touches fil
 | `metadata` | Reads dimensions, format, EXIF date, GPS, orientation; parses dates from filenames |
 | `takeout` | Detects Takeout sources, finds and parses JSON sidecars |
 | `thumbs` | Generates and locates cached thumbnails |
+| `cleanup` | Takeout cleanup (section 8.10), a package: folder checks, inventory, pure planning, hashing, verified copy, export, and the pipeline that runs the stages |
 | `ui` | Main window, grid, viewer, dialogs |
 
 ### 6.2 Concurrency

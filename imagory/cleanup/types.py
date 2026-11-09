@@ -144,3 +144,11 @@ class DoneResult:
     report_path: Path
     output_path: Path
     input_is_source: bool  # the input is already a source in the main library
+
+
+class CleanupError(Exception):
+    """A cleanup cannot go on; the message is meant for the user."""
+
+
+class NotEnoughSpace(CleanupError):
+    """The output drive has less free space than the copy needs (bytes plus 5%)."""

@@ -14,7 +14,7 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 
-from imagory.cleanup_types import Candidate, Plan, PlannedCopy, Rename
+from imagory.cleanup.types import Candidate, Plan, PlannedCopy, Rename
 from imagory.takeout import EDITED_SUFFIXES
 
 UNKNOWN_DATE_FOLDER = "Unknown date"

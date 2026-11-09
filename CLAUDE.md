@@ -21,7 +21,8 @@ Create new modules as the work needs them.
   - `metadata.py`: dimensions, format, EXIF date and orientation
   - `thumbs.py`: generating and locating cached thumbnails
   - `sources.py`: source checks, relocation, removal
-  - `takeout.py`: Takeout detection now, sidecar matching and reading later (PRD §8.3)
+  - `takeout.py`: Takeout detection, sidecar matching and reading (PRD §8.3)
+  - `cleanup/`: Takeout cleanup (PRD §8.10): `types`, `checks`, `inventory`, `planning` (pure rules), `hashing`, `copying`, `export`, and `pipeline` (the stages, run by `ui/cleanup_thread.py`). Its `__init__.py` imports nothing, so `db` can import `cleanup.types` without a cycle
   - `dates.py`: date rules (PRD §8.4), pure functions
   - `ui/`: main window, grid, viewer, dialogs
   - `paths.py` (or similar): library folder resolution and the bundled-resource helper (`sys._MEIPASS`)

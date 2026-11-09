@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 
 from imagory import db
-from imagory.cleanup_types import ExportAlbum, ExportOrigin, ExportRun
+from imagory.cleanup.types import ExportAlbum, ExportOrigin, ExportRun
 from tests.db_helpers import album_ids_of
 
 NEW_TABLES = ("cleanup_runs", "file_origins", "extra_files", "cleanup_copies")

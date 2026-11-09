@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from imagory import cleanup_copy
-from imagory.cleanup_copy import already_done, copy_verified
+from imagory.cleanup import copying
+from imagory.cleanup.copying import already_done, copy_verified
 from imagory.thumbs import hash_bytes
 from tests.fs_snapshot import assert_unchanged, snapshot
 
@@ -81,7 +81,7 @@ def test_dest_folder_read_only(src_dir, out):
 
 
 def test_cancel_mid_file(src_dir, out, monkeypatch):
-    monkeypatch.setattr(cleanup_copy, "CHUNK_SIZE", 1000)
+    monkeypatch.setattr(copying, "CHUNK_SIZE", 1000)
     before = snapshot(src_dir)
     data = (src_dir / "a.jpg").read_bytes()
     calls = []
@@ -115,7 +115,7 @@ def test_large_file_streamed(src_dir, out, monkeypatch):
             f.write(block)
     expected = hashlib.blake2b(big.read_bytes(), digest_size=16).hexdigest()
     chunk = 64 * 1024
-    monkeypatch.setattr(cleanup_copy, "CHUNK_SIZE", chunk)
+    monkeypatch.setattr(copying, "CHUNK_SIZE", chunk)
     before = snapshot(src_dir)
 
     sizes: list[int] = []
@@ -142,7 +142,7 @@ def test_large_file_streamed(src_dir, out, monkeypatch):
         f = real_open(path, mode, *a, **k)
         return Spy(f) if "r" in mode else f
 
-    monkeypatch.setattr(cleanup_copy, "open", spy_open, raising=False)
+    monkeypatch.setattr(copying, "open", spy_open, raising=False)
     r = copy_verified(big, out / "big.bin", expected, None)
     assert r.ok and (out / "big.bin").stat().st_size == 4096 * 1024
     assert sizes and all(n == chunk for n in sizes)

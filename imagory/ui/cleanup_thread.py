@@ -1,10 +1,10 @@
 """The cleanup worker thread: the only writer of the output database while a cleanup runs.
 
 One thread runs one job, either the analysis (pipeline stages 1 to 5) or the copy (stages 1, 6
-and 7). Each job creates its own :class:`~imagory.cleanup_run.CleanupPipeline` inside ``run()``,
-because a pipeline's SQLite connection belongs to the thread that opened it. The main window
-reads the main library's sources and the ``input_is_source`` flag on the main thread and passes
-them in.
+and 7). Each job creates its own :class:`~imagory.cleanup.pipeline.CleanupPipeline` inside
+``run()``, because a pipeline's SQLite connection belongs to the thread that opened it. The
+main window reads the main library's sources and the ``input_is_source`` flag on the main
+thread and passes them in.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, Literal
 from PySide6.QtCore import QThread, Signal
 
 from imagory import db
-from imagory.cleanup_run import CleanupPipeline
+from imagory.cleanup.pipeline import CleanupPipeline
 
 log = logging.getLogger(__name__)
 

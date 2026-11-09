@@ -1,22 +1,22 @@
 """Takeout cleanup pipeline (PRD §8.10, docs/takeout-cleanup-plan.md, stages 1 to 7).
 
-Ties together the planner (:mod:`imagory.cleanup`), the copy primitive
-(:mod:`imagory.cleanup_copy`), the export writers (:mod:`imagory.cleanup_export`) and the
-cleanup SQL in :mod:`imagory.db`. No Qt: a ``CleanupThread`` runs it on a worker thread and
-turns the ``progress`` callback into signals.
+Ties together the folder checks (:mod:`.checks`), the inventory (:mod:`.inventory`), the
+planner (:mod:`.planning`), the copy primitive (:mod:`.copying`), the export writers
+(:mod:`.export`) and the cleanup SQL in :mod:`imagory.db.cleanup`. No Qt: a ``CleanupThread``
+runs it on a worker thread and turns the ``progress`` callback into signals.
 
 Safety (PRD principle 1):
 
 * The **input** folder is only listed, ``stat``-ed and opened ``"rb"`` (by the Scanner's
-  workers, the hash workers, sidecar reads and :func:`cleanup_copy.copy_verified`). Nothing
+  workers, the hash workers, sidecar reads and :func:`.copying.copy_verified`). Nothing
   here writes, renames, moves or deletes anything in it.
 * Everything written goes under the **output** folder: copies through
   :meth:`CleanupPipeline._output_file` (which refuses any path that could leave the output),
   and the database, thumbnails, ``metadata.json``, reports and ``takeout-json/`` under
   ``<output>/.imagory``. :meth:`CleanupPipeline.open` refuses an output inside the input (and
   the other way round) before anything is created.
-* The main library database is only read, by :func:`check_folders` and
-  :func:`input_is_source`.
+* The main library database is only read, by :func:`.checks.check_folders` and
+  :func:`.checks.input_is_source`.
 
 Cancel and resume need no saved state beyond the output database (as in PRD §6.3): every
 stage picks up from what is committed there. One output database has one writer, the thread
@@ -26,15 +26,12 @@ running the pipeline; all stage methods must be called from the thread that call
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import multiprocessing
 import os
-import re
 import shutil
 import sqlite3
-import sys
 import threading
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import (
@@ -44,31 +41,39 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     wait,
 )
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 
-from imagory import cleanup, cleanup_copy, cleanup_export, dates, db, paths, takeout
-from imagory.cleanup_types import (
+from imagory import dates, db, paths, takeout
+from imagory.cleanup import copying, export, planning
+from imagory.cleanup.checks import (
+    check_folders_for,
+    cleaned_paths,
+    norm_path,
+    path_contains,
+    unfinished_run,
+)
+from imagory.cleanup.hashing import hash_batch
+from imagory.cleanup.inventory import Inventory, album_dir_of, build_inventory
+from imagory.cleanup.types import (
     Candidate,
+    CleanupError,
     CleanupReport,
     CopyResult,
     DoneResult,
-    FolderCheck,
+    NotEnoughSpace,
     Plan,
     PreviewCounts,
     Rename,
 )
 from imagory.scanner import (
-    SUPPORTED_EXTENSIONS,
     Progress,
     Scanner,
     WalkedFile,
     default_workers,
-    extension_of,
-    is_skipped_dir,
 )
-from imagory.thumbs import HASH_BYTES, fold_path
+from imagory.thumbs import fold_path
 
 log = logging.getLogger(__name__)
 
@@ -77,420 +82,16 @@ ProgressCallback = Callable[[str, int, int], None]  # (stage text, done, total)
 COMMIT_BATCH = 200  # stage 3 rows per transaction
 COPY_COMMIT_BATCH = 50  # copy results per transaction
 HASH_BATCH = 16  # files per hash-worker task
-HASH_CHUNK = 1024 * 1024
 DEFAULT_COPY_THREADS = 4  # copying is I/O bound
 DEFAULT_POOL_THRESHOLD = 64  # fewer files than this are hashed without a process pool
 
-# Takeout's year folders. Only the English name is confirmed (PRD §18 item 6).
-_YEAR_FOLDER = re.compile(r"^Photos from \d{4}$", re.IGNORECASE)
 ARCHIVE_ALBUM = "Archive"
 _ARCHIVE_NAMES = frozenset({"archive"})
 ALBUM_METADATA_NAME = "metadata.json"
-# Files an operating system drops into folders; they don't make an output folder "used".
-_IGNORABLE_NAMES = frozenset({"desktop.ini", "thumbs.db", ".ds_store"})
-_CLOUD_NAMES = frozenset(
-    {"onedrive", "dropbox", "google drive", "googledrive", "my drive", "icloud drive"}
-)
-_JSON_PREFIX = cleanup.JSON_FOLDER + "/"
+_JSON_PREFIX = planning.JSON_FOLDER + "/"
 
 
-class CleanupError(Exception):
-    """A cleanup cannot go on; the message is meant for the user."""
-
-
-class NotEnoughSpace(CleanupError):
-    """The output drive has less free space than the copy needs (bytes plus 5%)."""
-
-
-# --- folder checks (wizard pages 1 and 2) -----------------------------------------------------
-
-
-def _norm(path: Path | str) -> str:
-    # Windows paths are case-insensitive; normcase is a no-op elsewhere, so fold explicitly.
-    return os.path.normcase(os.path.abspath(path)).casefold()
-
-
-def _contains(outer: str, inner: str) -> bool:
-    """Whether normalised path ``inner`` is ``outer`` or lies inside it."""
-    if inner == outer:
-        return True
-    prefix = outer if outer.endswith(os.sep) else outer + os.sep
-    return inner.startswith(prefix)
-
-
-def check_input(input_root: Path) -> tuple[bool, str]:
-    """``(looks like Takeout, message)`` for the wizard's input page. A folder that isn't
-    detected as Takeout may still be used after the warning."""
-    if not Path(input_root).is_dir():
-        return False, "This folder doesn't exist or can't be read."
-    detection = takeout.detect_source_type(input_root)
-    if detection.type == "takeout":
-        return True, f"Google Takeout export. {detection.reason}"
-    return False, (
-        f"This doesn't look like a Google Takeout export ({detection.reason}) "
-        "You can continue anyway."
-    )
-
-
-def storage_warning(folder: Path) -> str | None:
-    """A warning when ``folder`` is in a cloud-synced folder or on a network share, where
-    SQLite databases are at risk (PRD §6.4)."""
-    text = str(folder)
-    if text.startswith(("\\\\", "//")):
-        return "This folder is on a network share."
-    for part in Path(os.path.abspath(folder)).parts:
-        folded = part.casefold()
-        if folded in _CLOUD_NAMES or folded.startswith("onedrive - "):
-            return f"This folder is inside “{part}”, a cloud-synced folder."
-    if sys.platform == "win32":  # pragma: no cover - Windows only
-        import ctypes
-
-        drive = os.path.splitdrive(os.path.abspath(folder))[0]
-        if drive and ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == 4:  # DRIVE_REMOTE
-            return "This folder is on a network drive."
-    return None
-
-
-def _storage_note(folder: Path) -> str:
-    warning = storage_warning(folder)
-    if warning is None:
-        return ""
-    return (
-        f" Warning: {warning} The output holds a database, which can be damaged by sync "
-        "tools and network drives; a local folder is safer."
-    )
-
-
-def unfinished_run(runs: Iterable[db.CleanupRun], input_root: Path | str) -> db.CleanupRun | None:
-    """The latest unfinished run of ``input_root`` among ``runs``. Paths are compared with
-    :func:`_norm` (``normcase`` and full casefold), the one comparison used everywhere."""
-    target = _norm(input_root)
-    mine = [r for r in runs if r.status != "done" and _norm(r.input_path) == target]
-    return max(mine, key=lambda r: r.id, default=None)
-
-
-def _output_state(input_root: Path, output_root: Path) -> FolderCheck:
-    """``new``, ``add``, ``resume`` or ``refused`` from what is in the output folder. An
-    existing output database is opened with ``db.open_output_database`` (nothing written)."""
-    if not output_root.exists():
-        return FolderCheck("new", "New folder: a new cleanup will be created.")
-    db_file = paths.cleanup_db_path(output_root)
-    if db_file.is_file():
-        try:
-            with db.open_output_database(db_file) as conn:
-                return _existing_output_state(conn, input_root)
-        except (db.OutputDatabaseError, sqlite3.Error):
-            return FolderCheck("refused", "This folder holds a database that can't be read.")
-    try:
-        entries = [e for e in os.listdir(output_root) if e.casefold() not in _IGNORABLE_NAMES]
-        if entries == [paths.CLEANUP_DIR_NAME] and paths.cleanup_dir(output_root).is_dir():
-            entries = [
-                e
-                for e in os.listdir(paths.cleanup_dir(output_root))
-                if e.casefold() not in _IGNORABLE_NAMES
-            ]
-    except OSError:
-        return FolderCheck("refused", "This folder can't be read.")
-    if entries:
-        return FolderCheck(
-            "refused",
-            "This folder isn't empty. Choose an empty folder or an existing cleanup output.",
-        )
-    return FolderCheck("new", "Empty folder: a new cleanup will be created.")
-
-
-def _existing_output_state(conn: sqlite3.Connection, input_root: Path) -> FolderCheck:
-    version = db.schema_version(conn)
-    if version > db.SCHEMA_VERSION:
-        return FolderCheck(
-            "refused", "This cleanup was made by a newer Imagory. Please update Imagory."
-        )
-    if version < db.OUTPUT_MIN_VERSION:
-        return FolderCheck("refused", "This folder is not an Imagory cleanup output.")
-    runs = db.list_runs(conn)
-    mine = unfinished_run(runs, input_root)
-    if mine is not None:
-        counts = db.copy_status_counts(conn, mine.id)
-        total = sum(counts.values())
-        done = f" ({counts['done']} of {total} files copied)" if total else ""
-        message = f"A cancelled cleanup of this Takeout folder will resume{done}."
-        return FolderCheck("resume", message)
-    others = [r for r in runs if r.status != "done"]
-    if others:
-        return FolderCheck(
-            "refused",
-            "This output has an unfinished cleanup of another folder "
-            f"({others[-1].input_path}). Choose that folder as the input to finish it first.",
-        )
-    files = sum(1 for _ in _cleaned_paths(conn))
-    message = f"Existing cleanup: {files} files. The new files will be added to it."
-    return FolderCheck("add", message)
-
-
-def _cleaned_paths(conn: sqlite3.Connection) -> Iterable[str]:
-    for source in db.list_sources(conn):
-        if source.type == "cleaned":
-            for row in db.list_cleanup_files(conn, source.id):
-                yield row.relative_path
-            for extra in db.list_extra_files(conn, source.id):
-                if not extra.relative_path.startswith(_JSON_PREFIX):
-                    yield extra.relative_path
-
-
-def check_folders(
-    main_conn: sqlite3.Connection, library_root: Path, input_root: Path, output_root: Path
-) -> FolderCheck:
-    """Check the input and output folders (PRD §8.10 folder rules) for the wizard.
-
-    Refused: a missing input, an output that is a file, the two folders inside each other,
-    either inside the library folder, an output that is already a ``plain`` or ``takeout``
-    source, a non-empty folder that isn't a cleanup output, and an output with an unfinished
-    run of another input. Otherwise ``new`` (empty or missing folder), ``add`` (an existing
-    cleanup output, also when it is a ``cleaned`` source) or ``resume`` (an unfinished run of
-    this input). A cloud or network folder adds a warning to the message.
-
-    Reads ``main_conn`` (sources only) and, read only, an existing output database. Nothing is
-    written anywhere.
-    """
-    return check_folders_for(db.list_sources(main_conn), library_root, input_root, output_root)
-
-
-def check_folders_for(
-    sources: Iterable[db.Source], library_root: Path, input_root: Path, output_root: Path
-) -> FolderCheck:
-    """:func:`check_folders` against a list of main-library sources. Needs no connection, so
-    the cleanup thread can run it on a snapshot taken on the main thread."""
-    input_root, output_root = Path(input_root), Path(output_root)
-    if not input_root.is_dir():
-        return FolderCheck("refused", "The Takeout folder doesn't exist.")
-    if output_root.exists() and not output_root.is_dir():
-        return FolderCheck("refused", "The output is a file, not a folder.")
-    inp, out, lib = _norm(input_root), _norm(output_root), _norm(library_root)
-    if inp == out:
-        return FolderCheck("refused", "The output folder must differ from the Takeout folder.")
-    if _contains(inp, out):
-        return FolderCheck("refused", "The output folder is inside the Takeout folder.")
-    if _contains(out, inp):
-        return FolderCheck("refused", "The Takeout folder is inside the output folder.")
-    if _contains(lib, inp) or _contains(lib, out):
-        return FolderCheck("refused", "A folder is inside Imagory's own library folder.")
-    cleaned_note = ""
-    for source in sources:
-        if _norm(source.root_path) != out:
-            continue
-        if source.type != "cleaned":
-            return FolderCheck(
-                "refused",
-                f"The output folder is already added as the source “{source.label}”.",
-            )
-        cleaned_note = (
-            f" It is the library source “{source.label}”, which is rescanned once "
-            "this run is added."
-        )
-    state = _output_state(input_root, output_root)
-    if state.mode == "refused":
-        return state
-    return FolderCheck(state.mode, state.message + cleaned_note + _storage_note(output_root))
-
-
-def input_is_source(main_conn: sqlite3.Connection, input_root: Path) -> bool:
-    """Whether the input folder is already a source in the main library (the swap offer)."""
-    target = _norm(input_root)
-    return any(_norm(s.root_path) == target for s in db.list_sources(main_conn))
-
-
-# --- inventory (stage 3, also used to check "safe to delete") ---------------------------------
-
-
-@dataclass
-class Inventory:
-    """Every file under the input, sorted for the cleanup. Paths are input-relative."""
-
-    files: dict[str, WalkedFile] = field(default_factory=dict)  # every non-Trash file
-    trash: list[str] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)  # not walked: links, hidden, unreadable
-    images: list[str] = field(default_factory=list)  # supported image extensions
-    others: list[str] = field(default_factory=list)  # neither an image nor JSON
-    jsons: list[str] = field(default_factory=list)  # every JSON file
-    sidecar_of: dict[str, str] = field(default_factory=dict)  # media path -> sidecar path
-    used_sidecars: set[str] = field(default_factory=set)
-    complete: bool = True
-
-    @property
-    def unused_json(self) -> list[str]:
-        """JSON files that aren't any file's sidecar (copied to ``takeout-json/``)."""
-        return sorted(j for j in self.jsons if j not in self.used_sidecars)
-
-    @property
-    def unmatched_sidecars(self) -> list[str]:
-        """Unused JSON files that look like sidecars (not album or account metadata)."""
-        return [
-            j
-            for j in self.unused_json
-            if j.rpartition("/")[2].casefold() not in takeout.NON_SIDECAR_JSON
-        ]
-
-
-def _is_trash(rel_dir: str) -> bool:
-    return takeout.is_trash_dir(rel_dir)
-
-
-def walk_inventory(
-    root: Path,
-    exclude: Path | None = None,
-    cancelled: Callable[[], bool] = lambda: False,
-) -> tuple[list[WalkedFile], list[str], list[str], bool]:
-    """List every file under ``root`` with the scan's walk rules (PRD §7.2), all extensions.
-
-    Returns ``(files, trash, skipped, complete)``: files outside Trash, files inside Takeout's
-    Trash, and what was not walked (symlinks, junctions, hidden and system folders, the
-    library folder, entries that can't be read; folders end in ``/``). Nothing is opened.
-    """
-    files: list[WalkedFile] = []
-    trash: list[str] = []
-    skipped: list[str] = []
-    exclude_norm = _norm(exclude) if exclude is not None else None
-    stack: list[tuple[str, str, bool]] = [(str(root), "", False)]
-    while stack:
-        if cancelled():
-            return files, trash, skipped, False
-        dir_path, rel_dir, in_trash = stack.pop()
-        try:
-            with os.scandir(dir_path) as entries:
-                children = sorted(entries, key=lambda e: e.name)
-        except OSError as exc:
-            log.warning("Cannot read folder %s: %s", dir_path, exc)
-            skipped.append(f"{rel_dir}/" if rel_dir else "./")
-            continue
-        subdirs: list[tuple[str, str, bool]] = []
-        for entry in children:
-            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
-            try:
-                if entry.is_symlink() or entry.is_junction():
-                    skipped.append(rel)
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    if is_skipped_dir(entry.name) or (
-                        exclude_norm is not None and _norm(entry.path) == exclude_norm
-                    ):
-                        skipped.append(rel + "/")
-                        continue
-                    subdirs.append((entry.path, rel, in_trash or _is_trash(rel)))
-                    continue
-                if not entry.is_file(follow_symlinks=False):
-                    skipped.append(rel)
-                    continue
-                st = entry.stat(follow_symlinks=False)
-            except OSError as exc:
-                log.warning("Cannot stat %s: %s", entry.path, exc)
-                skipped.append(rel)
-                continue
-            if in_trash:
-                trash.append(rel)
-            else:
-                files.append(WalkedFile(rel, st.st_size, st.st_mtime_ns))
-        stack.extend(reversed(subdirs))
-    return files, trash, skipped, True
-
-
-def match_other_files(
-    names: Iterable[str],
-    json_names: Iterable[str],
-    taken: Iterable[str] = (),
-    read_title: Callable[[str], str | None] | None = None,
-) -> dict[str, str | None]:
-    """Map non-image file names (videos, RAW, …) in one folder to their sidecar, or None.
-
-    The same rules as for images (``takeout.match_directory`` with ``is_media``): plain and
-    ``.supplemental-metadata`` forms, truncation with title checks, moved counters, and
-    ``-edited`` copies borrowing their original's sidecar. Sidecars in ``taken`` (already
-    used by an image) are not offered.
-    """
-    files = set(names)
-    taken_set = set(taken)
-    offered = [j for j in json_names if j not in taken_set and j not in files]
-    return takeout.match_directory(
-        [*files, *offered], read_title, is_media=files.__contains__
-    ).matches
-
-
-def build_inventory(
-    root: Path, exclude: Path | None = None, cancelled: Callable[[], bool] = lambda: False
-) -> Inventory:
-    """Walk the input (every extension) and match every file to its sidecar, folder by
-    folder. Images use ``takeout.match_folder`` exactly as the scan does; other files use
-    :func:`match_other_files`. Sidecar titles are read (read only) when matching needs them.
-    """
-    files, trash, skipped, complete = walk_inventory(root, exclude, cancelled)
-    inv = Inventory(trash=trash, skipped=skipped, complete=complete)
-    if not complete:
-        return inv
-    by_dir: dict[str, list[str]] = {}
-    for f in files:
-        inv.files[f.relative_path] = f
-        rel_dir, _, name = f.relative_path.rpartition("/")
-        by_dir.setdefault(rel_dir, []).append(name)
-    for rel_dir in sorted(by_dir):
-        if cancelled():
-            inv.complete = False
-            return inv
-        names = by_dir[rel_dir]
-        prefix = f"{rel_dir}/" if rel_dir else ""
-        folder = root.joinpath(*rel_dir.split("/")) if rel_dir else root
-        jsons = [n for n in names if n.casefold().endswith(takeout.SIDECAR_SUFFIX)]
-        images = [n for n in names if extension_of(n) in SUPPORTED_EXTENSIONS]
-        json_set, image_set = set(jsons), set(images)
-        others = [n for n in names if n not in json_set and n not in image_set]
-        inv.jsons += [prefix + n for n in jsons]
-        inv.images += [prefix + n for n in images]
-        inv.others += [prefix + n for n in others]
-        image_match = takeout.match_folder(folder, images + jsons)
-        used = {s for s in image_match.matches.values() if s is not None}
-        other_match = match_other_files(
-            others, jsons, used, lambda n, base=folder: takeout.read_title(base / n)
-        )
-        for name, side in [*image_match.matches.items(), *other_match.items()]:
-            if side is not None:
-                inv.sidecar_of[prefix + name] = prefix + side
-                inv.used_sidecars.add(prefix + side)
-    return inv
-
-
-# --- album folders -----------------------------------------------------------------------------
-
-
-def album_dir_of(relative_path: str) -> str | None:
-    """The input-relative album folder a file sits in, or None for a year folder, the root or
-    a file directly in "Google Photos". The folder below "Google Photos" (or below the input
-    root when there is none) is the album; ``Photos from YYYY`` is a year folder."""
-    parts = relative_path.split("/")[:-1]
-    base = next((i + 1 for i, p in enumerate(parts) if takeout.is_google_photos_name(p)), 0)
-    if len(parts) <= base or _YEAR_FOLDER.match(parts[base]):
-        return None
-    return "/".join(parts[: base + 1])
-
-
-# --- workers ----------------------------------------------------------------------------------
-
-
-def hash_file(path: str) -> str:
-    """BLAKE2b (16 bytes, as ``thumbs.hash_bytes``) of a file, streamed. Opens it ``rb``."""
-    hasher = hashlib.blake2b(digest_size=HASH_BYTES)
-    with open(path, "rb") as fh:
-        while chunk := fh.read(HASH_CHUNK):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def hash_batch(root: str, rels: list[str]) -> list[tuple[str, str | None, str | None]]:
-    """Worker entry point: ``(relative path, hash or None, error or None)`` per file."""
-    out: list[tuple[str, str | None, str | None]] = []
-    for rel in rels:
-        try:
-            out.append((rel, hash_file(os.path.join(root, *rel.split("/"))), None))
-        except OSError as exc:
-            out.append((rel, None, f"{type(exc).__name__}: {exc.strerror or exc}"))
-    return out
+# --- helpers ----------------------------------------------------------------------------------
 
 
 def format_bytes(n: int) -> str:
@@ -682,9 +283,9 @@ class CleanupPipeline:
             )
 
     def _find_temp_source(self, sources: Sequence[db.Source] | None = None) -> db.Source | None:
-        inp = _norm(self.input)
+        inp = norm_path(self.input)
         for s in sources if sources is not None else db.list_sources(self.conn):
-            if s.type == "takeout" and _norm(s.root_path) == inp:
+            if s.type == "takeout" and norm_path(s.root_path) == inp:
                 return s
         return None
 
@@ -951,8 +552,8 @@ class CleanupPipeline:
         ones included), the cleaned source's rows and the files on disk (``.imagory`` aside
         from ``takeout-json``). ``exclude`` (casefolded) is left out."""
         taken = set(db.copy_targets(self.conn))
-        taken.update(_cleaned_paths(self.conn))
-        for files in (self._disk_files(""), self._disk_files(cleanup.JSON_FOLDER)):
+        taken.update(cleaned_paths(self.conn))
+        for files in (self._disk_files(""), self._disk_files(planning.JSON_FOLDER)):
             taken.update(files)
         skip = {e.casefold() for e in exclude}
         return {t for t in taken if t.casefold() not in skip}
@@ -1064,12 +665,12 @@ class CleanupPipeline:
             raise CleanupError("cancelled")
         cands, info = self._candidates(inv)
         existing = self._existing_output_paths()
-        plan = cleanup.build_plan(cands, existing, len(str(self.output)))
+        plan = planning.build_plan(cands, existing, len(str(self.output)))
         return plan, cands, info
 
     def plan(self) -> bool:
         """Stage 4: choose the kept copy per hash, name and place every copy
-        (:func:`cleanup.build_plan`), and record every input copy as an origin of its kept
+        (:func:`planning.build_plan`), and record every input copy as an origin of its kept
         row plus the ``pending`` copies, in one transaction with the ``planned`` status. A
         run that is already planned is left as it is."""
         self.open()
@@ -1203,8 +804,8 @@ class CleanupPipeline:
         ):
             raise CleanupError(f"Unsafe output path: {rel!r}")
         dest = self.output.joinpath(*parts)
-        if not _contains(_norm(self.output), _norm(dest)) or _contains(
-            _norm(self.input), _norm(dest)
+        if not path_contains(norm_path(self.output), norm_path(dest)) or path_contains(
+            norm_path(self.input), norm_path(dest)
         ):
             raise CleanupError(f"Unsafe output path: {rel!r}")
         return dest
@@ -1222,14 +823,14 @@ class CleanupPipeline:
             if date is None or job.target_relative_path.startswith(_JSON_PREFIX):
                 return job.modified_time
             try:
-                return cleanup.taken_mtime_ns(date.taken_at_local, self.tz)
+                return planning.taken_mtime_ns(date.taken_at_local, self.tz)
             except (ValueError, OverflowError, OSError):
                 return job.modified_time
 
         return mtime
 
     def copy(self) -> bool:
-        """Stage 6: copy every ``pending`` copy through :func:`cleanup_copy.copy_verified` in a
+        """Stage 6: copy every ``pending`` copy through :func:`copying.copy_verified` in a
         small thread pool (``.part`` file, source hash check, re-read check, rename, mtime).
         This thread is the only database writer: results are marked ``done`` or ``error`` in
         batches. A ``done`` copy whose file no longer has its size and mtime goes back to
@@ -1249,7 +850,7 @@ class CleanupPipeline:
                     dest = self._output_file(job.target_relative_path)
                 except CleanupError:
                     continue
-                if not cleanup_copy.already_done(dest, job.size, mtime_of(job)):
+                if not copying.already_done(dest, job.size, mtime_of(job)):
                     log.info("Copying %s again: the copy changed", job.target_relative_path)
                     db.reset_copy(self.conn, job.id)
             # A failure may have been transient (a drive unplugged): try every error again.
@@ -1330,7 +931,7 @@ class CleanupPipeline:
             dest = self._output_file(job.target_relative_path)
             if not job.content_hash:
                 return CopyResult(False, None, None, "no content hash")
-            return cleanup_copy.copy_verified(
+            return copying.copy_verified(
                 self._input_file(job.source_relative_path), dest, job.content_hash, mtime_ns,
                 cancel,
             )  # fmt: skip
@@ -1348,7 +949,7 @@ class CleanupPipeline:
                 dest = self._output_file(job.target_relative_path)
             except CleanupError:
                 continue
-            part = dest.with_name(dest.name + cleanup_copy.PART_SUFFIX)
+            part = dest.with_name(dest.name + copying.PART_SUFFIX)
             try:
                 if part.is_symlink() or not part.is_file():
                     continue
@@ -1488,11 +1089,11 @@ class CleanupPipeline:
         files = db.export_files(self.conn, cleaned_id)
         stamp = _utc_stamp()
         try:
-            cleanup_export.write_metadata_json(path, runs, albums, files, stamp)
+            export.write_metadata_json(path, runs, albums, files, stamp)
         except UnicodeEncodeError:
             log.warning("metadata.json: some names can't be written as UTF-8; escaping them")
             try:
-                cleanup_export.write_metadata_json(
+                export.write_metadata_json(
                     path,
                     [replace(r, input_path=_safe_text(r.input_path)) for r in runs],
                     [
@@ -1518,11 +1119,11 @@ class CleanupPipeline:
             n += 1
         try:
             folder.mkdir(parents=True, exist_ok=True)
-            cleanup_export.write_report(path, report)
+            export.write_report(path, report)
         except UnicodeEncodeError:
             log.warning("Cleanup report: some names can't be written as UTF-8; escaping them")
             try:
-                cleanup_export.write_report(path, _safe_report(report))
+                export.write_report(path, _safe_report(report))
             except Exception:
                 log.exception("Could not write %s", path)
         except Exception:
@@ -1568,11 +1169,11 @@ def _renames_from(text: str | None) -> tuple[Rename, ...]:
 
 
 def _with_margin(total: int) -> int:
-    return -(-total * (100 + cleanup.SPACE_MARGIN_PERCENT) // 100)
+    return -(-total * (100 + planning.SPACE_MARGIN_PERCENT) // 100)
 
 
 def _safe_export_file(f: object) -> object:
-    from imagory.cleanup_types import ExportFile, ExportOrigin
+    from imagory.cleanup.types import ExportFile, ExportOrigin
 
     assert isinstance(f, ExportFile)
     return replace(

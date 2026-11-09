@@ -15,7 +15,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import IO, Any
 
-from imagory.cleanup_types import (
+from imagory.cleanup.types import (
     CleanupReport,
     ExportAlbum,
     ExportFile,
