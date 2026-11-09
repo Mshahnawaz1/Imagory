@@ -416,7 +416,7 @@ def finalise_run(
     5. Copies in ``error`` are deleted with the origins of their kept row; then every row of
        the temporary source goes: files, extra files, scan runs and the source itself. An
        origin still pointing at one of those rows makes the transaction fail.
-    6. Affected photos get their primary copy and date recomputed (a photo left with no
+    6. Affected photos get their primary file and date recomputed (a photo left with no
        file is deleted), and the run is marked ``done`` with ``finished_at`` and ``counts``.
     """
     if temp_source_id == cleaned_source_id:

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 # A photo is identified by its content hash (PRD §8.5): all files with that hash belong
-# to it. Its primary copy is the first ok file by source added date, then first seen, then
+# to it. Its primary file is the first ok file by source added date, then first seen, then
 # id. If all its files are missing the first missing one is kept as primary, so the photo
 # stays hidden from the grid but can still be shown by a "Missing" filter. Its date is the
 # best date across all its files, missing ones included (PRD §8.4).
@@ -90,7 +90,7 @@ def _refresh_date(conn: sqlite3.Connection, photo_id: int) -> None:
 
 
 def refresh_photos(conn: sqlite3.Connection, photo_ids: Iterable[int]) -> int:
-    """Recompute the primary copy and date of photos whose files changed, and delete those
+    """Recompute the primary file and date of photos whose files changed, and delete those
     left with no file rows at all (missing rows count as files). Returns how many were
     deleted. Called while a scan applies results and by confirmed user removals."""
     deleted = 0

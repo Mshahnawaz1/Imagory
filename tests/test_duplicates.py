@@ -1,4 +1,4 @@
-"""Exact duplicates, photo identity by hash, primary copy, missing photos, remove missing,
+"""Exact duplicates, photo identity by hash, primary file, missing photos, remove missing,
 and date wiring (PRD §8.2, §8.4, §8.5)."""
 
 import os
@@ -115,7 +115,7 @@ def test_duplicates_across_sources_and_primary_by_source_added_date(tmp_path, li
     assert [p.photo_id for batch in batches for p in batch] == [pid]
 
 
-def test_primary_copy_hands_over_and_missing_photo_rule(tmp_path, lib):
+def test_primary_file_hands_over_and_missing_photo_rule(tmp_path, lib):
     root, conn = lib
     first_dir, second_dir = tmp_path / "a", tmp_path / "b"
     img = make_image(first_dir / "x.jpg")
@@ -128,7 +128,7 @@ def test_primary_copy_hands_over_and_missing_photo_rule(tmp_path, lib):
     pid = photo_of(conn, first.id, "x.jpg")["id"]
     assert primary_of(conn, pid) == (first.id, "x.jpg")
 
-    # The primary copy goes missing: the next copy takes over and the photo stays visible.
+    # The primary file goes missing: the next file takes over and the photo stays visible.
     os.replace(first_dir / "x.jpg", aside)
     assert scan(conn, first, root).missing == 1
     assert primary_of(conn, pid) == (second.id, "x.jpg")

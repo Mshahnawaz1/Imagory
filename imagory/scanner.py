@@ -475,7 +475,7 @@ class Scanner:
                 return
             now = db.utc_now()
             good = [r for r in pending if not r.error]
-            # A copy of a photo the grid already shows must not be reported to it again.
+            # Another file of a photo the grid already shows must not be reported to it again.
             visible = db.visible_photo_ids(self.conn, (r.content_hash for r in good))
             outcomes: list[tuple[str, int]] = []
             with db.transaction(self.conn):

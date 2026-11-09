@@ -18,7 +18,8 @@ def set_photo_takeout_metadata(
     """Store Takeout people and metadata on the photo of a file, merging with what is there.
 
     People are only ever added (a photo found in several places has the union of the names).
-    The first non-empty caption and upload time are kept; a photo is a favourite if any copy is.
+    The first non-empty caption and upload time are kept; a photo is a favourite if any of
+    its files is.
     """
     row = conn.execute("SELECT photo_id FROM files WHERE id = ?", (file_id,)).fetchone()
     if row is None or row[0] is None:
@@ -43,7 +44,7 @@ def set_photo_takeout_metadata(
 class Person:
     id: int
     name: str
-    photo_count: int  # photos with at least one copy that is ok
+    photo_count: int  # photos with at least one file that is ok
 
 
 def list_people(conn: sqlite3.Connection) -> list[Person]:

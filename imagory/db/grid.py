@@ -115,7 +115,7 @@ class PhotoFilter:
     """What the grid shows. ``PhotoFilter()`` means no filter: the rows of ``grid_photos``.
 
     All fields combine with AND. The file-level fields (``text``, ``source_ids``,
-    ``folder``) must all be satisfied by the *same* copy of a photo.
+    ``folder``) must all be satisfied by the *same* file of a photo.
     """
 
     text: str = ""  # whitespace-separated words, all must be in the file's relative path
@@ -141,7 +141,7 @@ def _next_day(day: str) -> str:
     return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
 
 
-# The row file of a photo: its primary copy, or any copy if the primary is unset.
+# The row file of a photo: its primary file, or any file if the primary is unset.
 _ROW_FILE = (
     "f.id = COALESCE(p.primary_file_id, (SELECT MIN(m.id) FROM files m WHERE m.photo_id = p.id))"
 )

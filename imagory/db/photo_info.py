@@ -33,7 +33,7 @@ class PhotoInfo:
     height: int | None
     format: str | None
     primary: PhotoLocation | None  # None when the photo has no file rows at all
-    others: tuple[PhotoLocation, ...]  # the other copies ("Also found in...")
+    others: tuple[PhotoLocation, ...]  # the other files ("Also found in...")
     people: tuple[str, ...] = ()  # Takeout people names (PRD §8.9)
     description: str | None = None
     favorite: bool = False
@@ -43,7 +43,7 @@ class PhotoInfo:
 def photo_info(conn: sqlite3.Connection, photo_id: int) -> PhotoInfo | None:
     """Everything the info panel shows for one photo; ``None`` if it no longer exists.
 
-    The primary copy comes first, then the other copies ordered by source label and path.
+    The primary file comes first, then the other files ordered by source label and path.
     """
     row = conn.execute(
         "SELECT taken_at_local, date_source, latitude, longitude, width, height, format, "

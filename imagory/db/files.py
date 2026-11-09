@@ -40,7 +40,7 @@ def load_file_states(conn: sqlite3.Connection, source_id: int) -> list[FileState
 
 
 def mark_missing(conn: sqlite3.Connection, file_ids: Iterable[int]) -> None:
-    """Mark files missing; a missing primary copy hands over to the next copy."""
+    """Mark files missing; a missing primary file hands over to the next file."""
     file_ids = list(file_ids)
     conn.executemany(
         "UPDATE files SET status = 'missing' WHERE id = ?", ((fid,) for fid in file_ids)
@@ -49,7 +49,7 @@ def mark_missing(conn: sqlite3.Connection, file_ids: Iterable[int]) -> None:
 
 
 def mark_ok(conn: sqlite3.Connection, file_ids: Iterable[int]) -> None:
-    """Mark files present again; the primary copy is recomputed."""
+    """Mark files present again; the primary file is recomputed."""
     file_ids = list(file_ids)
     conn.executemany("UPDATE files SET status = 'ok' WHERE id = ?", ((fid,) for fid in file_ids))
     _refresh_primaries(conn, _photo_ids_of_files(conn, file_ids))
@@ -109,7 +109,7 @@ def find_moved_file(conn: sqlite3.Connection, source_id: int, content_hash: str)
 def insert_file(conn: sqlite3.Connection, source_id: int, rec: FileRecord, now: str) -> int:
     """Insert a new file and attach it to the photo with its hash (created if needed).
 
-    Returns the file id. The photo's primary copy and date are recomputed.
+    Returns the file id. The photo's primary file and date are recomputed.
     """
     photo_id = _photo_for_hash(conn, rec.content_hash)
     if photo_id is None:
@@ -293,7 +293,7 @@ def apply_recomputed_dates(
 
 
 def visible_photo_ids(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[int]:
-    """Photos with these hashes that the grid shows now (their primary copy is ok)."""
+    """Photos with these hashes that the grid shows now (their primary file is ok)."""
     hashes = list(set(hashes))
     found: set[int] = set()
     for start in range(0, len(hashes), 500):

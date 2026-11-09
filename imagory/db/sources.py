@@ -116,7 +116,7 @@ def source_file_paths(conn: sqlite3.Connection, source_id: int, limit: int) -> l
 def delete_source(conn: sqlite3.Connection, source_id: int) -> None:
     """Delete a source with its files, scan runs, and photos left without files.
 
-    Photos that keep files in other sources get their primary copy and date recomputed.
+    Photos that keep files in other sources get their primary file and date recomputed.
     Only ever called after the user confirms. Files on disk are not touched.
     """
     # Album memberships (PRD §8.8) go with the photos via ON DELETE CASCADE.
@@ -169,7 +169,7 @@ def delete_missing_files(conn: sqlite3.Connection, source_id: int) -> RemovedMis
     """Delete a source's missing file rows and the photos left with no files (PRD §8.2).
 
     Only ever called after the user confirms; never automatic. Files on disk are not
-    touched. Photos keeping other files get their primary copy and date recomputed.
+    touched. Photos keeping other files get their primary file and date recomputed.
     """
     with transaction(conn):
         photo_ids = _photo_ids_of(conn, "source_id = ? AND status = 'missing'", (source_id,))

@@ -60,7 +60,7 @@ def hash_bytes(data: bytes) -> str:
 
 
 def thumb_path(thumbs_root: Path, content_hash: str) -> Path:
-    """``thumbs/ab/cd/<hash>.jpg``, shared by every copy of a photo in every source."""
+    """``thumbs/ab/cd/<hash>.jpg``, shared by every file of a photo in every source."""
     return thumbs_root / content_hash[0:2] / content_hash[2:4] / f"{content_hash}.jpg"
 
 

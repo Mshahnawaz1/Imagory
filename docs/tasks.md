@@ -56,7 +56,7 @@ The feature is merged (see Completed). Still to check on real Windows, not WSL:
 - [x] §8.1 Sources: source type and detection, rename, relocate, remove, per-source thumbnails, multi-source scan, Add source and Sources dialogs, grid crash fix (`docs/issues.md` issue 1)
   - deferred: recompute dates on type change (wave 2); album memberships now go with removed photos (cascade)
 - [x] Wave 1 (five parallel agents, `docs/v1-agents.md`):
-  - §8.5 duplicates: BLAKE2b in the worker, photo identity by hash, primary copy, thumbnails keyed by hash (migration 3); V0 databases are replaced instead of migrated
+  - §8.5 duplicates: BLAKE2b in the worker, photo identity by hash, primary file, thumbnails keyed by hash (migration 3); V0 databases are replaced instead of migrated
   - §8.2 moved-file detection, missing-photo rule, "Remove missing…" per source
   - §8.4 dates wired into the scan for plain folders (EXIF with offset, filename, mtime, best date across copies)
   - §8.3 Takeout sidecar matching, reading, Trash rule, matching report (`takeout.py`, not yet used by the scan)
