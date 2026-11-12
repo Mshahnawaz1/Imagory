@@ -277,7 +277,7 @@ def test_log_report_caps_sample(caplog):
 @pytest.fixture(scope="module")
 def export(tmp_path_factory):
     out = tmp_path_factory.mktemp("takeout")
-    script = Path(__file__).resolve().parent.parent / "scripts" / "make_fake_library.py"
+    script = Path(__file__).resolve().parents[2] / "scripts" / "make_fake_library.py"
     args = [sys.executable, str(script), str(out), "--takeout", "--count", "300", "--seed", "7"]
     subprocess.run(args, check=True, capture_output=True)
     return out, json.loads((out / "manifest.json").read_text(encoding="utf-8"))

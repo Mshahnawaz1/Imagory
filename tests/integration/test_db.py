@@ -126,14 +126,20 @@ def test_insert_creates_photo_and_grid_order(conn):
     assert [p.relative_path for p in db.grid_photos(conn)] == ["a.jpg", "b.jpg"]
 
 
-def test_delete_source_removes_rows(conn):
-    src = db.create_source(conn, "/photos", "photos")
-    db.insert_file(conn, src.id, _record("a.jpg"), db.utc_now())
-    run = db.start_scan_run(conn, src.id, db.utc_now())
-    db.finish_scan_run(conn, run, src.id, "completed", db.ScanCounts(found=1, added=1))
-    db.delete_source(conn, src.id)
-    for table in ("sources", "files", "photos", "scan_runs"):
-        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+def test_delete_source_removes_its_rows_and_keeps_other_sources(conn):
+    a = db.create_source(conn, "/a", "a")
+    b = db.create_source(conn, "/b", "b")
+    now = db.utc_now()
+    db.insert_file(conn, a.id, _record("x.jpg"), now)
+    db.insert_file(conn, b.id, _record("x.jpg"), now)
+    run = db.start_scan_run(conn, a.id, now)
+    db.finish_scan_run(conn, run, a.id, "completed", db.ScanCounts(found=1, added=1))
+    db.delete_source(conn, a.id)
+    assert [s.id for s in db.list_sources(conn)] == [b.id]
+    assert [(p.source_id, p.relative_path) for p in db.grid_photos(conn)] == [(b.id, "x.jpg")]
+    for table in ("files", "photos"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0] == 0
 
 
 def test_settings_roundtrip(conn):
@@ -198,14 +204,3 @@ def test_grid_spans_sources_with_path_then_source_ties(conn):
         ("x.jpg", a.id),
         ("x.jpg", b.id),
     ]
-
-
-def test_delete_source_keeps_other_sources(conn):
-    a = db.create_source(conn, "/a", "a")
-    b = db.create_source(conn, "/b", "b")
-    now = db.utc_now()
-    db.insert_file(conn, a.id, _record("x.jpg"), now)
-    db.insert_file(conn, b.id, _record("x.jpg"), now)
-    db.delete_source(conn, a.id)
-    assert [(p.source_id, p.relative_path) for p in db.grid_photos(conn)] == [(b.id, "x.jpg")]
-    assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 1

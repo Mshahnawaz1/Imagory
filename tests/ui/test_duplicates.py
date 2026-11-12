@@ -15,7 +15,7 @@ from imagory import db, paths, sources, thumbs
 from imagory.scanner import Scanner
 from tests.db_helpers import album_ids_of
 from tests.imaging import make_image
-from tests.test_scan import snapshot
+from tests.integration.test_scan import snapshot
 
 
 @pytest.fixture
@@ -339,7 +339,7 @@ def test_remove_missing_from_sources_dialog_asks_first(qtbot, tmp_path, monkeypa
     from PySide6.QtWidgets import QMessageBox
 
     from imagory.ui.sources_dialog import SourcesDialog
-    from tests.test_ui import open_window, wait_scan
+    from tests.ui.test_ui import open_window, wait_scan
 
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     src = tmp_path / "photos"

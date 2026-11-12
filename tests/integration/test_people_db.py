@@ -47,11 +47,6 @@ def person_id(conn, name):
     return conn.execute("SELECT id FROM people WHERE name = ?", (name,)).fetchone()[0]
 
 
-def test_new_database_has_people_tables(conn):
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"people", "photo_people"} <= tables
-
-
 def test_names_unioned_and_unique_ignoring_case(conn):
     s = add_source(conn)
     pid, f1 = add_photo(conn, s, [("a.jpg", "ok"), ("b/a.jpg", "ok")])

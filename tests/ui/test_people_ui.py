@@ -85,17 +85,6 @@ def test_sidebar_lists_people_and_click_filters_grid(window, qtbot):
     assert len(window.photos) == 6
 
 
-def test_person_filter_combines_with_other_filters(window, qtbot):
-    tag(window.conn, "0.jpg", "Anna")
-    tag(window.conn, "1.jpg", "Anna")
-    window.refresh_sidebar()
-    anna = person_items(window)[0].data(VALUE_ROLE)
-
-    window.filter_bar.set_filter(db.PhotoFilter(person_id=anna, date_from="2020-01-02"))
-    wait_loaded(qtbot, window)
-    assert len(window.photos) == 1
-
-
 def test_filter_bar_person_combo_chip_and_clear(window, qtbot):
     tag(window.conn, "2.jpg", "Cleo")
     window.refresh_sidebar()

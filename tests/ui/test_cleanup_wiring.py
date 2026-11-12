@@ -17,7 +17,7 @@ from imagory.ui import cleanup_wizard as cw  # noqa: E402
 from imagory.ui import main_window as mw  # noqa: E402
 from tests.fs_snapshot import assert_unchanged, snapshot  # noqa: E402
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "make_fake_library.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "make_fake_library.py"
 ALBUM_TITLE = "Lisbon trip 2004"
 WAIT = 120_000
 
