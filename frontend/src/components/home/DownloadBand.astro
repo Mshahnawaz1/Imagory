@@ -1,0 +1,80 @@
+---
+import { downloads, links, release, repo, type Os } from "../../site";
+import DownloadButton from "../DownloadButton.astro";
+import Icon from "../Icon.astro";
+
+const cards: { os: Os; note: string }[] = [
+  { os: "windows", note: "A single file. Double-click to run, nothing to install." },
+  { os: "linux", note: "Unpack it, then run ./Imagory. Best effort: less tested than Windows." },
+];
+---
+<section id="download" class="section download" aria-labelledby="download-title">
+  <div class="container">
+    <div class="head">
+      <h2 id="download-title">Free and open source</h2>
+      <p class="lead">Version {release.version}. No account, no sign-up, nothing to pay.</p>
+    </div>
+    <div class="cards">
+      {cards.map(({ os, note }, i) => (
+        <article class:list={["card", "dcard", { main: i === 0 }]} aria-labelledby={`dl-${os}`}>
+          <div class="top">
+            <span class="icon-box"><Icon name={os} /></span>
+            <div>
+              <h3 id={`dl-${os}`}>{downloads[os].label}</h3>
+              <p class="file">{downloads[os].file}</p>
+            </div>
+          </div>
+          <dl>
+            <div><dt>Runs on</dt><dd>{downloads[os].requirements}</dd></div>
+            <div><dt>Size</dt><dd>{downloads[os].size}</dd></div>
+          </dl>
+          <p class="note">{note}</p>
+          <DownloadButton os={os} variant={i === 0 ? "primary" : "secondary"} class="full" />
+        </article>
+      ))}
+    </div>
+    <div class="foot">
+      <p class="warn">
+        Windows may warn about an unsigned app.{" "}
+        <a href="/docs/windows-warnings">How to run it</a>
+      </p>
+      <p class="links">
+        <a href={links.releases} rel="noopener">All releases</a>
+        <span aria-hidden="true">·</span>
+        <a href={repo} rel="noopener">Build from source</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .head { text-align: center; margin: 0 auto 24px; }
+  .head .lead { margin-inline: auto; }
+  .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-width: 920px; margin-inline: auto; }
+  .dcard { display: flex; flex-direction: column; gap: 14px; padding: 20px 22px; }
+  .dcard.main { border-color: var(--selection); box-shadow: inset 0 0 0 1px var(--selection); }
+  .top { display: flex; gap: 16px; align-items: center; }
+  .top .icon-box { width: 40px; height: 40px; }
+  .main .icon-box { border-color: var(--selection); background: color-mix(in srgb, var(--accent) 35%, var(--surface)); color: var(--forest); }
+  :global(:root[data-theme-resolved="dark"]) .main .icon-box { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent); }
+  h3 { margin: 0 0 2px; font-size: 1.1rem; }
+  .file { margin: 0; font: 400 .85rem var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
+  dl { margin: 0; display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+  dl div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+  dt { color: var(--muted); font-size: .9rem; }
+  dd { margin: 0; font-size: .875rem; }
+  .note { margin: 0; color: var(--muted); font-size: .85rem; flex: 1; }
+  .dcard :global(.full) { width: 100%; }
+  .trust { list-style: none; margin: 32px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 24px; color: var(--muted); font-size: .92rem; }
+  .trust li { display: flex; align-items: center; gap: 8px; }
+  .trust li::before { content: ""; width: 6px; height: 6px; background: var(--selection); }
+  .foot { margin-top: 18px; text-align: center; font-size: .875rem; }
+  .foot p { margin: 0 0 6px; }
+  .warn a { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+  .warn :global(svg) { width: 15px; height: 15px; }
+  .links { color: var(--muted); }
+  .links span { margin-inline: 8px; }
+  @media (max-width: 900px) { .cards { grid-template-columns: minmax(0, 1fr); max-width: 520px; } }
+  @media (max-width: 520px) { .dcard { padding: 18px; } }
+  @media (max-width: 400px) { .dcard { padding: 18px 16px; } .dcard :global(.ver) { display: none; } }
+</style>

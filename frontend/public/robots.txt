@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://imagory.mshahnawaz.me/sitemap-index.xml

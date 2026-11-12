@@ -1,0 +1,103 @@
+---
+import Screenshot from "../Screenshot.astro";
+// Full-window shots fill their panel; small dialogs sit in it as a framed window.
+type Panel = {
+  name: string; darkName?: string; label: string; alt: string; pos: string;
+  window?: { title: string; width: number; height: number; show: number };
+};
+const panels: Panel[] = [
+  {
+    name: "main-light",
+    darkName: "main-dark",
+    label: "Grid with month headers",
+    alt: "The photo grid, grouped under month headers, with the sources sidebar.",
+    pos: "left top",
+  },
+  {
+    name: "viewer-dark",
+    label: "Viewer and info panel",
+    alt: "The photo viewer with the info panel open, showing date, place, people and file.",
+    pos: "center",
+  },
+  {
+    name: "sources-light",
+    label: "Folders and Takeout sources",
+    alt: "The Sources dialog listing a photo folder and a Google Takeout export with their photo counts.",
+    pos: "left top",
+    window: { title: "Sources", width: 1000, height: 300, show: 620 },
+  },
+  {
+    name: "cleanup-light",
+    label: "Clean up Takeout",
+    alt: "The Clean up Takeout wizard showing what it will copy and how much space it needs.",
+    pos: "left top",
+    window: { title: "Clean up Takeout", width: 640, height: 460, show: 440 },
+  },
+];
+---
+<section class="showcase" aria-labelledby="showcase-title">
+  <div class="container">
+    <div class="head">
+      <h2 id="showcase-title">All your folders, one library</h2>
+      <p class="lead">
+        Add photo folders and extracted Takeout exports as sources. Imagory scans them in the
+        background and shows everything in one grid, newest first.
+      </p>
+    </div>
+    <ol class="panels">
+      {panels.map((p) => (
+        <li class:list={["panel", { win: p.window }]} style={`--pos: ${p.pos}; --ww: ${p.window?.show ?? 0}px`}>
+          {p.window ? (
+            <Screenshot name={p.name} alt={p.alt} title={p.window.title}
+              width={p.window.width} height={p.window.height} sizes="600px" />
+          ) : (
+            <Screenshot name={p.name} darkName={p.darkName} alt={p.alt} chrome={false}
+              sizes="(min-width: 760px) 50vw, 100vw" />
+          )}
+          <span class="cap">{p.label}</span>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>
+
+<style>
+  .showcase { padding-block: clamp(24px, 3.5vw, 48px) var(--section); }
+  .head { max-width: 720px; margin-bottom: 24px; }
+  .panels {
+    --s: 48px; --h: clamp(260px, 27vw, 360px);
+    list-style: none; margin: 0; padding: 0; display: flex; height: var(--h);
+    background: var(--bg); border: 1px solid var(--line); overflow: hidden;
+  }
+  .panel {
+    position: relative; flex: 1 1 0; min-width: 0; margin-left: calc(-1 * var(--s) + 6px);
+    clip-path: polygon(var(--s) 0, 100% 0, calc(100% - var(--s)) 100%, 0 100%);
+    background: var(--viewer);
+  }
+  .panel:first-child { flex-grow: 1.35; margin-left: 0; clip-path: polygon(0 0, 100% 0, calc(100% - var(--s)) 100%, 0 100%); }
+  .panel:last-child { clip-path: polygon(var(--s) 0, 100% 0, 100% 100%, 0 100%); }
+  .panel { overflow: hidden; }
+  .panel:not(.win) :global(.shot), .panel:not(.win) :global(.frame), .panel:not(.win) :global(.body) { height: 100%; }
+  .panel:not(.win) :global(.frame) { border: 0; box-shadow: none; }
+  .panel:not(.win) :global(.body) { aspect-ratio: auto !important; }
+  .panel.win { background: var(--surface-alt) radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 18px 18px; }
+  .panel.win :global(.shot) { position: absolute; left: calc(var(--s) + 16px); top: 45%; transform: translateY(-50%); width: var(--ww); }
+  .panel.panel :global(.img) { object-position: var(--pos); }
+  .panel :global(.m-label) { display: none; }
+  .cap {
+    position: absolute; left: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px; font-size: .85rem; font-weight: 600;
+    background: var(--surface); color: var(--text); border: 1px solid var(--line);
+  }
+  .panel:not(:first-child) .cap { left: 8px; }
+  .num { font: 400 .75rem var(--font-mono); color: var(--muted); }
+  .chips { list-style: none; margin: 24px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  @media (max-width: 760px) {
+    .panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: auto; gap: 6px; border: 0; background: none; }
+    .panel, .panel:first-child, .panel:last-child { margin: 0; clip-path: none; height: 200px; border: 1px solid var(--line); }
+    .panel.win :global(.shot) { left: 12px; top: 16px; transform: none; width: calc(var(--ww) * .75); }
+  }
+  @media (max-width: 480px) {
+    .panels { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>

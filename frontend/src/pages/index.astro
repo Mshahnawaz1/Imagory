@@ -1,0 +1,26 @@
+---
+import Base from "../layouts/Base.astro";
+import AnnouncementBar from "../components/home/AnnouncementBar.astro";
+import Hero from "../components/home/Hero.astro";
+import FeatureStrip from "../components/home/FeatureStrip.astro";
+import Showcase from "../components/home/Showcase.astro";
+import Fast from "../components/home/Fast.astro";
+import Cleanup from "../components/home/Cleanup.astro";
+import FeatureGrid from "../components/home/FeatureGrid.astro";
+import DownloadBand from "../components/home/DownloadBand.astro";
+import Faq from "../components/home/Faq.astro";
+---
+<Base
+  title="Imagory: an offline photo browser for folders and Google Takeout"
+  description="Browse your local photo folders and Google Takeout exports, fast and fully offline. Free and open source for Windows and Linux."
+>
+  <AnnouncementBar slot="top" />
+  <Hero />
+  <FeatureStrip />
+  <Showcase />
+  <Fast />
+  <Cleanup />
+  <FeatureGrid />
+  <DownloadBand />
+  <Faq />
+</Base>

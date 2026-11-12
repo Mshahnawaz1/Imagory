@@ -1,0 +1,75 @@
+---
+import Base from "./Base.astro";
+import Sidebar from "../components/docs/Sidebar.astro";
+import { sortedDocs, type Doc } from "../components/docs/docs";
+import { links } from "../site";
+
+interface Props {
+  doc: Doc;
+  headings: { depth: number; slug: string; text: string }[];
+}
+const { doc, headings } = Astro.props;
+const all = await sortedDocs();
+const i = all.findIndex((d) => d.id === doc.id);
+const prev = i > 0 ? all[i - 1] : undefined;
+const next = i < all.length - 1 ? all[i + 1] : undefined;
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+<Base title={doc.data.title} description={doc.data.description}>
+  <div class="container docs">
+    <details class="mobile-menu">
+      <summary>Docs menu</summary>
+      <Sidebar current={doc.id} />
+    </details>
+    <aside class="side"><Sidebar current={doc.id} /></aside>
+    <article class="main">
+      <p class="eyebrow">{doc.data.group}</p>
+      <h1>{doc.data.title}</h1>
+      <p class="lead">{doc.data.description}</p>
+      <div class="prose"><slot /></div>
+      <p class="edit"><a href={`${links.editDocs}/${doc.id}.md`} rel="noopener">Edit this page on GitHub</a></p>
+      <nav class="pager" aria-label="Previous and next page">
+        {prev ? <a class="prev" href={`/docs/${prev.id}`}><span>Previous</span>{prev.data.title}</a> : <span />}
+        {next ? <a class="next" href={`/docs/${next.id}`}><span>Next</span>{next.data.title}</a> : <span />}
+      </nav>
+    </article>
+    {toc.length > 0 && (
+      <aside class="toc" aria-label="On this page">
+        <p class="toc-title">On this page</p>
+        <ul>
+          {toc.map((h) => <li class={`d${h.depth}`}><a href={`#${h.slug}`}>{h.text}</a></li>)}
+        </ul>
+      </aside>
+    )}
+  </div>
+</Base>
+<style>
+  .docs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; padding-block: 32px 80px; }
+  .mobile-menu { border: 1px solid var(--line); background: var(--surface); }
+  .mobile-menu summary { padding: 12px 16px; cursor: pointer; font-weight: 600; }
+  .mobile-menu :global(.docs-nav) { padding: 8px 16px 16px; }
+  .side, .toc { display: none; }
+  .main { min-width: 0; }
+  .main h1 { font-size: clamp(1.75rem, 3vw, 2.25rem); margin-bottom: 10px; }
+  .edit { margin-top: 48px; font-size: .9rem; }
+  .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 24px; }
+  .pager a { display: block; padding: 16px; border: 1px solid var(--line); background: var(--surface); color: var(--text); text-decoration: none; font-weight: 600; }
+  .pager a:hover { border-color: var(--selection); }
+  .pager span { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); margin-bottom: 4px; }
+  .pager .next { text-align: right; grid-column: 2; }
+  @media (min-width: 900px) {
+    .docs { grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+    .mobile-menu { display: none; }
+    .side { display: block; position: sticky; top: calc(var(--header-h) + 24px); align-self: start; }
+  }
+  @media (min-width: 1200px) {
+    .docs { grid-template-columns: 220px minmax(0, 1fr) 200px; }
+    .toc { display: block; position: sticky; top: calc(var(--header-h) + 24px); align-self: start; font-size: .875rem; }
+    .toc-title { font-size: .8125rem; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
+    .toc ul { list-style: none; margin: 0; padding: 0; }
+    .toc li { margin: 6px 0; }
+    .toc .d3 { padding-left: 12px; }
+    .toc a { color: var(--muted); text-decoration: none; }
+    .toc a:hover { color: var(--selection); }
+  }
+</style>

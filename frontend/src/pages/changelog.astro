@@ -1,0 +1,38 @@
+---
+import { getCollection, render } from "astro:content";
+import Base from "../layouts/Base.astro";
+import { repo } from "../site";
+
+const entries = (await getCollection("changelog")).sort(
+  (a, b) => b.data.date.getTime() - a.data.date.getTime(),
+);
+const rendered = await Promise.all(entries.map(async (e) => ({ e, Content: (await render(e)).Content })));
+const fmt = (d: Date) => d.toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+---
+<Base title="Changelog" description="What changed in each Imagory release.">
+  <div class="container wrap">
+    <h1>Releases</h1>
+    <p class="lead">What changed in each version of Imagory, newest first.</p>
+    {rendered.map(({ e, Content }) => (
+      <article id={`v${e.data.version}`} class="entry">
+        <header>
+          <h2><a href={`#v${e.data.version}`}>Version {e.data.version}</a></h2>
+          <time datetime={e.data.date.toISOString().slice(0, 10)}>{fmt(e.data.date)}</time>
+          <a class="gh" href={`${repo}/releases/tag/v${e.data.version}`} rel="noopener">View on GitHub</a>
+        </header>
+        {e.data.title && <p class="lead">{e.data.title}</p>}
+        <div class="prose"><Content /></div>
+      </article>
+    ))}
+  </div>
+</Base>
+<style>
+  .wrap { padding-block: 48px 96px; }
+  h1 { font-size: clamp(2.2rem, 5vw, 3.25rem); margin-bottom: 12px; }
+  .entry { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--line); }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
+  h2 { margin: 0; font-size: 1.8rem; }
+  h2 a { color: var(--text); text-decoration: none; }
+  time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .9rem; }
+  .gh { font-size: .9rem; display: inline-block; padding-block: 6px; }
+</style>

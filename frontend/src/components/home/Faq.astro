@@ -1,0 +1,66 @@
+---
+import HomeIcon from "./HomeIcon.astro";
+const faqs: { q: string; a: string }[] = [
+  {
+    q: "Is it really offline?",
+    a: "Yes. The app makes no network connections: no telemetry, no accounts, no update checks. Your photos, the database, the thumbnails and the logs all stay on your computer.",
+  },
+  {
+    q: "Does Imagory change my photos?",
+    a: "No. It only reads them. It never changes, moves, renames or deletes a photo, and never writes anything into your photo folders. Clean up Takeout writes copies only into an output folder you pick.",
+  },
+  {
+    q: "Does it work with Takeout zips?",
+    a: "Not yet. Extract the zip files first, then add the extracted folder as a source. Zip support is planned.",
+  },
+  {
+    q: "Why does Windows warn me about it?",
+    a: "Imagory releases are not code-signed, so Windows SmartScreen may say “Windows protected your PC”. Click More info, then Run anyway. Some antivirus tools also flag unsigned single-file programs. You can build it yourself from source instead.",
+  },
+  {
+    q: "Where is my library stored?",
+    a: "In %LOCALAPPDATA%\\Imagory on Windows and ~/.local/share/imagory on Linux. It holds the database, a thumbnail cache you can delete at any time, and the logs.",
+  },
+  {
+    q: "Does it find faces?",
+    a: "No. Imagory does no face recognition. The People section shows the names tagged in Google Photos, read from your Takeout export.",
+  },
+  {
+    q: "Is it free?",
+    a: "Yes. Imagory is free and open source under the MIT licence. There is no account and nothing to buy.",
+  },
+];
+---
+<section class="section band faq" aria-labelledby="faq-title">
+  <div class="container grid">
+    <div class="head">
+      <h2 id="faq-title">Questions</h2>
+      <p class="muted">Something else? <a href="/docs/faq">More in the FAQ</a>.</p>
+    </div>
+    <div class="list">
+      {faqs.map((f) => (
+        <details>
+          <summary><span>{f.q}</span><HomeIcon name="plus" class="pm" /></summary>
+          <p>{f.a}</p>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: clamp(32px, 6vw, 80px); align-items: start; }
+  .list { border-top: 1px solid var(--line); }
+  details { border-bottom: 1px solid var(--line); }
+  summary {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 12px 4px; cursor: pointer; list-style: none; font-weight: 500; font-size: .975rem;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary:hover { color: var(--selection); }
+  summary :global(.pm) { flex: none; transition: transform .2s; color: var(--muted); }
+  details[open] summary :global(.pm) { transform: rotate(45deg); }
+  details p { margin: 0; padding: 0 40px 20px 4px; color: var(--muted); }
+  @media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  @media (prefers-reduced-motion: reduce) { summary :global(.pm) { transition: none; } }
+</style>

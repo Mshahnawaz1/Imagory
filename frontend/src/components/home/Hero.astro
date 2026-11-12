@@ -1,0 +1,82 @@
+---
+import { links } from "../../site";
+import DownloadButton from "../DownloadButton.astro";
+import Screenshot from "../Screenshot.astro";
+---
+<section class="hero" aria-labelledby="hero-title">
+  <div class="dots-bg dots" aria-hidden="true"></div>
+  <div class="container grid">
+    <div class="copy">
+      <h1 id="hero-title">Your photo library, offline and organised.</h1>
+      <p class="lead sub">
+        Browse your local photo folders and Google Takeout exports in one fast grid. Nothing is
+        uploaded, and your photos are only ever read.
+      </p>
+      <div class="ctas">
+        <DownloadButton os="windows" size="md" />
+        <DownloadButton os="linux" variant="secondary" size="md" />
+      </div>
+      <a class="all" href={links.releases} rel="noopener">
+        All releases
+      </a>
+      <p class="trust">Windows 10 &amp; 11 · Linux x86_64 · Free and open source · No account</p>
+    </div>
+    <div class="visual">
+      <Screenshot
+        name="main-light"
+        darkName="main-dark"
+        alt="The Imagory main window: a sidebar with Library, People, Albums and Sources, and a grid of photo thumbnails grouped under month headers."
+        loading="eager"
+        sizes="(min-width: 1200px) 960px, (min-width: 900px) 75vw, 110vw"
+      />
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero { position: relative; overflow-x: clip; padding-block: clamp(32px, 4.5vw, 64px); }
+  .dots-bg {
+    position: absolute; inset: 0 50% 0 0;
+    mask-image: linear-gradient(to right, #000 40%, transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 40%, transparent);
+  }
+  .grid {
+    position: relative; display: grid; align-items: center;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: clamp(32px, 5vw, 64px);
+  }
+  .tag { margin: 0 0 28px; color: var(--text); }
+  .tag .dot { width: 7px; height: 7px; background: var(--selection); }
+  h1 { margin-bottom: 18px; }
+  .sub { margin-bottom: 22px; }
+  /* About 60% of the full-size button: 240 x 34 px instead of 400 x 50 px. */
+  .ctas { display: flex; flex-wrap: wrap; gap: 10px; }
+  .ctas :global(.btn) { flex: 0 0 248px; min-height: 34px; padding: 7px 12px; gap: 8px; font-size: .8125rem; white-space: nowrap; }
+  .ctas :global(.btn .ver) { font-size: .75rem; }
+  .ctas :global(.btn svg) { width: 14px; height: 14px; }
+  .all {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding-block: 6px;
+    font-size: .875rem; font-weight: 500;
+  }
+  .all :global(svg) { width: 16px; height: 16px; }
+  .trust { margin: 14px 0 0; font-size: .92rem; color: var(--muted); }
+
+  /* The screenshot runs past the right edge of the viewport, as in the reference. */
+  .visual {
+    margin-right: calc(-1 * (max(0px, (100vw - var(--max)) / 2) + var(--gutter)));
+    min-width: 0;
+  }
+  .visual :global(.shot) { width: max(118%, 640px); }
+  .visual :global(.frame) { border-right: 0; }
+  /* Cap the height so the hero fits a laptop screen; the window is cropped at the bottom. */
+  .visual :global(.shot) { max-height: min(500px, 68vh); overflow: hidden; }
+
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .dots-bg { inset: 0 0 40% 0; }
+    .visual :global(.shot) { width: 115%; }
+  }
+  @media (max-width: 520px) {
+    .ctas { flex-direction: column; }
+    .ctas :global(.btn) { flex: none; width: 100%; max-width: 320px; min-height: 40px; }
+  }
+</style>

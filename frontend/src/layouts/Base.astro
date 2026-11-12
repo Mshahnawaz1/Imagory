@@ -1,0 +1,65 @@
+---
+import "../styles/global.css";
+import Analytics from "@vercel/analytics/astro";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+
+interface Props {
+  title: string; // page name; " · Imagory" is appended except on the home page
+  description: string;
+  image?: string; // Open Graph image path under public/
+  noindex?: boolean;
+}
+const { title, description, image = "/og.png", noindex = false } = Astro.props;
+const fullTitle = Astro.url.pathname === "/" ? title : `${title} · Imagory`;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const ogImage = new URL(image, Astro.site);
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b1a15" media="(prefers-color-scheme: dark)" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Imagory" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta name="twitter:card" content="summary_large_image" />
+    {noindex && <meta name="robots" content="noindex" />}
+    <slot name="head" />
+    <script is:inline>
+      // Resolve the theme before first paint: saved choice, else the system setting.
+      (function () {
+        var root = document.documentElement, saved = null;
+        try { saved = localStorage.getItem("theme"); } catch (e) {}
+        if (saved === "light" || saved === "dark") root.dataset.theme = saved;
+        var dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        root.dataset.themeResolved = dark ? "dark" : "light";
+        if (!saved) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function (e) {
+          if (!root.dataset.theme) root.dataset.themeResolved = e.matches ? "dark" : "light";
+        });
+      })();
+    </script>
+  </head>
+  <body>
+    <a class="sr-only skip" href="#main">Skip to content</a>
+    <slot name="top" />
+    <Header />
+    <main id="main"><slot /></main>
+    <Footer />
+    <slot name="bottom" />
+    <Analytics />
+  </body>
+</html>
+<style>
+  .skip:focus { position: fixed; left: 16px; top: 16px; width: auto; height: auto; clip: auto; padding: 8px 16px; background: var(--forest); color: var(--on-forest); z-index: 100; }
+</style>

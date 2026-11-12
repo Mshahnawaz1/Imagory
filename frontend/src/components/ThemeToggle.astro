@@ -1,0 +1,28 @@
+---
+import Icon from "./Icon.astro";
+---
+<button class="theme-toggle" type="button" aria-label="Switch colour theme" title="Switch colour theme" data-theme-toggle>
+  <Icon name="sun" class="i-sun" />
+  <Icon name="moon" class="i-moon" />
+</button>
+<style>
+  .theme-toggle {
+    display: grid; place-items: center; width: 36px; height: 36px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer;
+  }
+  .theme-toggle:hover { border-color: var(--text); }
+  .theme-toggle :global(.i-moon) { display: none; }
+  :global(:root[data-theme-resolved="dark"]) .theme-toggle :global(.i-sun) { display: none; }
+  :global(:root[data-theme-resolved="dark"]) .theme-toggle :global(.i-moon) { display: block; }
+</style>
+<script>
+  document.querySelectorAll<HTMLButtonElement>("[data-theme-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const root = document.documentElement;
+      const next = root.dataset.themeResolved === "dark" ? "light" : "dark";
+      root.dataset.theme = next;
+      root.dataset.themeResolved = next;
+      try { localStorage.setItem("theme", next); } catch {}
+    });
+  });
+</script>

@@ -1,0 +1,50 @@
+---
+import { release } from "../../site";
+import Icon from "../Icon.astro";
+const key = `announce-${release.version}`;
+const short = release.version.split(".").slice(0, 2).join(".");
+---
+<div class="announce" data-announce data-key={key}>
+  <div class="container inner">
+    <span class="badge">New</span>
+    <p>
+      Imagory {short} is out, now with a Linux build.{" "}
+      <a href="/changelog">Changelog</a>
+    </p>
+    <button type="button" class="close" aria-label="Dismiss announcement" data-announce-close>
+      <Icon name="close" />
+    </button>
+  </div>
+</div>
+<script is:inline define:vars={{ key }}>
+  // Hide before paint if dismissed earlier.
+  (function () {
+    var el = document.querySelector("[data-announce]");
+    try { if (localStorage.getItem(key) === "1") el.hidden = true; } catch (e) {}
+    var btn = el.querySelector("[data-announce-close]");
+    btn.addEventListener("click", function () {
+      el.hidden = true;
+      try { localStorage.setItem(key, "1"); } catch (e) {}
+    });
+  })();
+</script>
+<style>
+  .announce { background: #10291f; color: #f7f5ef; font-size: .85rem; border-bottom: 1px solid var(--line); }
+  .announce a { color: inherit; }
+  .announce[hidden] { display: none; }
+  .inner { display: flex; align-items: center; gap: 12px; min-height: 40px; padding-block: 6px; }
+  p { margin: 0 auto; text-align: center; line-height: 1.4; }
+  a { color: inherit; font-weight: 600; white-space: nowrap; }
+  .announce :global(.arr) { display: inline; width: 14px; height: 14px; vertical-align: -2px; }
+  .badge {
+    flex: none; padding: 1px 8px; font: 600 .72rem/1.6 var(--font-sans); 
+    background: var(--accent); color: var(--on-accent);
+  }
+  .close {
+    flex: none; display: grid; place-items: center; width: 32px; height: 32px;
+    background: none; border: 0; color: inherit; cursor: pointer; opacity: .8;
+  }
+  .close:hover { opacity: 1; }
+  .close :global(svg) { width: 16px; height: 16px; }
+  @media (max-width: 480px) { .badge { display: none; } }
+</style>

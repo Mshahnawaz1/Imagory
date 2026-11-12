@@ -1,0 +1,77 @@
+---
+import { Image } from "astro:assets";
+import logo from "../assets/logo.svg";
+import logoDark from "../assets/logo-dark.svg";
+import { nav } from "../site";
+import Icon from "./Icon.astro";
+import ThemeToggle from "./ThemeToggle.astro";
+const path = Astro.url.pathname;
+const isActive = (href: string) => href.startsWith("/") && !href.includes("#") && path.startsWith(href);
+---
+<header class="site-header">
+  <div class="container bar">
+    <a class="brand" href="/" aria-label="Imagory home">
+      <Image src={logo} alt="" class="logo logo-light" height={24} width={92} loading="eager" />
+      <Image src={logoDark} alt="" class="logo logo-dark" height={24} width={92} loading="eager" />
+    </a>
+    <nav class="nav" aria-label="Main" id="site-nav">
+      {nav.map((item) => (
+        <a href={item.href} aria-current={isActive(item.href) ? "page" : undefined}
+          {...(item.href.startsWith("http") ? { rel: "noopener" } : {})}>{item.label}</a>
+      ))}
+    </nav>
+    <div class="actions">
+      <ThemeToggle />
+      <a class="btn btn-primary dl" href="/#download">
+        <Icon name="download" /> <span>Download</span>
+      </a>
+      <button class="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="site-nav" data-menu>
+        <Icon name="menu" />
+      </button>
+    </div>
+  </div>
+</header>
+<script>
+  const btn = document.querySelector<HTMLButtonElement>("[data-menu]");
+  const header = document.querySelector(".site-header");
+  btn?.addEventListener("click", () => {
+    const open = header?.classList.toggle("open") ?? false;
+    btn.setAttribute("aria-expanded", String(open));
+    btn.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+  });
+  document.querySelectorAll("#site-nav a").forEach((a) =>
+    a.addEventListener("click", () => { header?.classList.remove("open"); btn?.setAttribute("aria-expanded", "false"); }),
+  );
+</script>
+<style>
+  .site-header {
+    position: sticky; top: 0; z-index: 50; height: var(--header-h);
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar { height: 100%; display: flex; align-items: center; gap: 24px; }
+  .brand { display: flex; align-items: center; flex: none; }
+  .logo { height: 24px; width: auto; }
+  .logo-dark { display: none; }
+  :global(:root[data-theme-resolved="dark"]) .logo-light { display: none; }
+  :global(:root[data-theme-resolved="dark"]) .logo-dark { display: block; }
+  .nav { display: flex; gap: 4px; margin-inline: auto; }
+  .nav a { color: var(--text); text-decoration: none; padding: 6px 12px; font-size: .9rem; font-weight: 500; opacity: .75; }
+  .nav a:hover, .nav a[aria-current="page"] { opacity: 1; background: var(--surface-alt); }
+  .actions { display: flex; align-items: center; gap: 8px; }
+  .dl { min-height: 36px; padding: 8px 14px; font-size: .875rem; }
+  .menu-btn { display: none; width: 36px; height: 36px; place-items: center; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+  @media (max-width: 700px) {
+    .menu-btn { display: grid; }
+    .actions { margin-left: auto; }
+    .dl span { display: none; }
+    .dl { padding: 8px 11px; }
+    .nav {
+      display: none; position: absolute; inset: var(--header-h) 0 auto 0; flex-direction: column;
+      background: var(--bg); border-bottom: 1px solid var(--line); padding: 8px var(--gutter) 16px;
+    }
+    .site-header.open .nav { display: flex; }
+    .nav a { padding: 12px 8px; }
+  }
+</style>

@@ -1,0 +1,105 @@
+---
+import Icon from "../Icon.astro";
+import Tree, { type TreeNode } from "./FileTree.astro";
+
+const before: TreeNode[] = [
+  { name: "Takeout", dir: true, children: [
+    { name: "Google Photos", dir: true, children: [
+      { name: "Photos from 2019", dir: true, children: [
+        { name: "IMG_20190131_235959.jpg" },
+        { name: "IMG_20190131_235959.jpg.supplemental-metadata.json", tag: "json" },
+        { name: "PXL_20190704_182311.jpg" },
+        { name: "PXL_20190704_182311.jpg.json", tag: "json" },
+      ] },
+      { name: "Lisbon trip", dir: true, children: [
+        { name: "IMG_20190131_235959.jpg", tag: "dup" },
+        { name: "IMG_20190131_235959.jpg.json", tag: "json" },
+      ] },
+      { name: "Trash", dir: true, tag: "skip" },
+    ] },
+  ] },
+];
+
+const after: TreeNode[] = [
+  { name: "Photos (cleaned)", dir: true, children: [
+    { name: "2019", dir: true, children: [
+      { name: "01", dir: true, children: [{ name: "IMG_20190131_235959.jpg" }] },
+      { name: "07", dir: true, children: [{ name: "PXL_20190704_182311.jpg" }] },
+    ] },
+    { name: ".imagory", dir: true, tag: "meta", children: [
+      { name: "imagory.db" },
+      { name: "metadata.json" },
+      { name: "reports", dir: true },
+    ] },
+  ] },
+];
+
+const points = [
+  { title: "Copies only", text: "It writes into an output folder you pick." },
+  { title: "Every copy verified", text: "Checked against the original before it counts." },
+  { title: "Metadata kept", text: "Dates, places and people go into metadata.json." },
+  { title: "Original untouched", text: "The export is never changed. Deleting it is up to you." },
+];
+---
+<section class="section cleanup" aria-labelledby="cleanup-title">
+  <div class="container">
+    <div class="head">
+      <h2 id="cleanup-title">Turn a messy Takeout into a tidy folder</h2>
+      <p class="lead">
+        Takeout puts a JSON file next to every photo, copies photos into each album folder, and
+        sets file dates to when you unzipped it. Clean up Takeout makes a sorted copy, one file
+        per photo, in <code>YYYY/MM</code> folders.{" "}
+        <a href="/docs/takeout-cleanup">How it works</a>
+      </p>
+    </div>
+
+    <div class="compare">
+      <figure class="pane card">
+        <figcaption><span class="label">Before</span> Extracted Takeout export</figcaption>
+        <Tree nodes={before} />
+      </figure>
+      <div class="arrow" aria-hidden="true"><Icon name="arrow-right" /></div>
+      <figure class="pane card after">
+        <figcaption><span class="label">After</span> Your output folder</figcaption>
+        <Tree nodes={after} />
+      </figure>
+    </div>
+
+    <div class="bottom">
+      <ul class="points">
+        {points.map((p) => (
+          <li>
+            <div><h3>{p.title}</h3><p>{p.text}</p></div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<style>
+  .head { max-width: 760px; margin-bottom: 16px; }
+  .head code { font-size: .85em; padding: .1em .35em; background: var(--surface-alt); border: 1px solid var(--line); color: var(--text); }
+  .compare { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; align-items: stretch; }
+  .pane { margin: 0; padding: 12px 16px; }
+  .pane.after { border-color: var(--selection); }
+  figcaption { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-weight: 600; font-size: .875rem; }
+  .label { padding: 2px 8px; font: 500 .75rem/1.6 var(--font-sans); border: 1px solid var(--line); color: var(--muted); }
+  .after .label { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .arrow { display: grid; place-items: center; color: var(--muted); }
+  .arrow :global(svg) { width: 22px; height: 22px; }
+
+  .bottom { margin-top: 16px; }
+  .points { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+  .points li { border-top: 2px solid var(--forest); padding-top: 10px; }
+  .points h3 { font-size: .875rem; margin: 0 0 2px; }
+  .points p { margin: 0; font-size: .8125rem; color: var(--muted); line-height: 1.5; }
+
+  @media (max-width: 1000px) { .points { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 900px) { .compare { max-width: 560px; margin-inline: auto; } }
+  @media (max-width: 900px) {
+    .compare { grid-template-columns: minmax(0, 1fr); }
+    .arrow :global(svg) { transform: rotate(90deg); }
+  }
+  @media (max-width: 520px) { .points { grid-template-columns: minmax(0, 1fr); } .pane { padding: 16px 12px; } }
+</style>

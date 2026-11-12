@@ -1,0 +1,60 @@
+---
+import HomeIcon from "./HomeIcon.astro";
+// Targets are from PRD §10; the "measured" figures are the bench.py results recorded there.
+const rows = [
+  { what: "Photos in one scrolling grid", target: "100,000", measured: "100,000" },
+  { what: "Open a scanned library to the first thumbnails", target: "under 1 s", measured: "0.22 s" },
+  { what: "Rescan 100,000 unchanged photos", target: "under 1 min", measured: "6.3 s (95,000 photos)" },
+];
+const points = [
+  "Scans run in the background with progress, and photos appear as they are processed.",
+  "Cancel any time. The next rescan carries on where it stopped.",
+  "The window stays responsive: the heavy work runs in separate worker processes.",
+  "A file you moved inside a source keeps its place instead of showing up as missing and new.",
+];
+---
+<section class="section band fast" aria-labelledby="fast-title">
+  <div class="container grid">
+    <div class="copy">
+      <h2 id="fast-title">Fast with 100,000 photos</h2>
+      <p class="lead">
+        The first scan of a large library takes a while, so it runs in the background. After
+        that, opening the library and rescanning it are quick.
+      </p>
+      <ul class="points">
+        {points.map((p) => <li><HomeIcon name="check" /><span>{p}</span></li>)}
+      </ul>
+    </div>
+    <figure class="stats">
+      <table>
+        <thead><tr><th scope="col">Task</th><th scope="col">Target</th><th scope="col">Measured</th></tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr><th scope="row">{r.what}</th><td>{r.target}</td><td>{r.measured}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <figcaption>
+        Measured on Linux with the project's benchmark script and a generated library. Windows
+        figures will follow.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<style>
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(32px, 6vw, 80px); align-items: start; }
+  .points { list-style: none; margin: 32px 0 0; padding: 0; display: grid; gap: 14px; }
+  .points li { display: flex; gap: 12px; align-items: flex-start; }
+  .points :global(svg) { flex: none; margin-top: 3px; color: var(--selection); }
+  .stats { margin: 0; border: 1px solid var(--line); background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th { font-weight: 500; color: var(--muted); font-size: .8125rem; background: var(--surface-alt); }
+  tbody th { font-weight: 400; }
+  td { white-space: nowrap; }
+  td:last-child { font-weight: 600; }
+  figcaption { padding: 12px 18px; font-size: .8125rem; color: var(--muted); }
+  @media (max-width: 520px) { table { font-size: .8125rem; } th, td { padding: 10px 10px; } td:last-child { white-space: normal; } }
+  @media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+</style>

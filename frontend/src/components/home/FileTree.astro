@@ -1,0 +1,47 @@
+---
+// A small recursive file tree for the before/after illustration.
+import HomeIcon from "./HomeIcon.astro";
+
+export type TreeNode = {
+  name: string;
+  dir?: boolean;
+  tag?: "json" | "dup" | "skip" | "meta";
+  children?: TreeNode[];
+};
+interface Props { nodes: TreeNode[]; root?: boolean }
+const { nodes, root = true } = Astro.props;
+const tagText = { json: "JSON", dup: "duplicate", skip: "not copied", meta: "metadata" } as const;
+---
+<ul class:list={["tree", { root }]}>
+  {nodes.map((n) => (
+    <li class:list={[n.tag && `t-${n.tag}`]}>
+      <span class="row">
+        <HomeIcon name={n.dir ? "folder" : "file"} class="ico" />
+        <span class="name">{n.name}</span>
+        {n.tag && <span class="tag">{tagText[n.tag]}</span>}
+      </span>
+      {n.children && <Astro.self nodes={n.children} root={false} />}
+    </li>
+  ))}
+</ul>
+
+<style>
+  .tree { list-style: none; margin: 0; padding: 0; font: 400 .75rem/1.4 var(--font-mono); }
+  .tree:not(.root) { margin-left: 6px; padding-left: 12px; border-left: 1px solid var(--line); }
+  .row { display: flex; align-items: flex-start; gap: 7px; padding: 1px 0; min-width: 0; }
+  .row :global(.ico) { flex: none; width: 13px; height: 13px; margin-top: 2px; color: var(--muted); }
+  .name { min-width: 0; overflow-wrap: anywhere; }
+  .tag {
+    flex: none; margin-left: auto; padding: 0 5px; font: 500 .7rem/1.5 var(--font-sans);
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .t-json > .row .name, .t-skip > .row .name { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+  .t-dup > .row .name { color: var(--muted); }
+  .t-dup > .row .tag { border-style: dashed; }
+  .t-meta > .row .tag { border-color: var(--selection); color: var(--selection); }
+  @media (max-width: 520px) {
+    .tree { font-size: .7rem; }
+    .tree:not(.root) { margin-left: 4px; padding-left: 9px; }
+    .tag { display: none; }
+  }
+</style>

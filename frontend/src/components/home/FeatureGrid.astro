@@ -1,0 +1,62 @@
+---
+import HomeIcon, { type HomeIconName } from "./HomeIcon.astro";
+const items: { icon: HomeIconName; title: string; text: string }[] = [
+  {
+    icon: "duplicates",
+    title: "Exact duplicates shown once",
+    text: "Identical files appear once in the grid, wherever they are in your sources. Moved files are recognised.",
+  },
+  {
+    icon: "calendar",
+    title: "The right dates",
+    text: "From Takeout, from EXIF (with its time zone when known) or from the filename, such as IMG_20190131_235959.",
+  },
+  {
+    icon: "search",
+    title: "Search and filters",
+    text: "Narrow the grid down by what you're looking for, including by person.",
+  },
+  {
+    icon: "album",
+    title: "Albums",
+    text: "Group photos into albums. Albums from a cleaned Takeout come along too.",
+  },
+  {
+    icon: "people",
+    title: "People from Takeout",
+    text: "The names tagged in Google Photos, read from the export. Imagory does no face recognition.",
+  },
+  {
+    icon: "zoom",
+    title: "Viewer with zoom",
+    text: "Open any photo, zoom in, and see its date, place, people and file in the info panel.",
+  },
+];
+---
+<section class="section band" aria-labelledby="grid-title">
+  <div class="container">
+    <div class="head">
+      <h2 id="grid-title">Everything in one place</h2>
+    </div>
+    <ul class="grid">
+      {items.map((it) => (
+        <li class="card item">
+          <span class="icon-box"><HomeIcon name={it.icon} /></span>
+          <h3>{it.title}</h3>
+          <p>{it.text}</p>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .head { margin-bottom: 24px; }
+  .grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .item { padding: 18px 20px; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 14px; align-items: start; }
+  .item .icon-box { grid-row: span 2; width: 34px; height: 34px; }
+  h3 { margin: 6px 0 4px; font-size: .95rem; }
+  p { margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.5; }
+  @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 600px) { .grid { grid-template-columns: minmax(0, 1fr); } .item { padding: 16px; } }
+</style>

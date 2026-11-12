@@ -1,0 +1,64 @@
+/* Colours from imagory/ui/theme.py. Light is the default; dark follows the
+   system unless the visitor picked light, and is forced by data-theme="dark". */
+:root {
+  --forest: #10291f;
+  --on-forest: #f7f5ef;
+  --bg: #fbfaf6;
+  --paper: #efede6;
+  --surface: #fbfaf6;
+  --surface-alt: #f3f1ea;
+  --line: #dcd9ce;
+  --text: #10291f;
+  --muted: #6b7568;
+  --selection: #2f6b3f; /* links, focus, highlighted headline words */
+  --accent: #bfe24b; /* fills only, never text on light backgrounds */
+  --on-accent: #10291f;
+  --viewer: #0b1a15;
+  --dot: rgb(16 41 31 / 0.09);
+  --shadow: 0 1px 2px rgb(16 41 31 / 0.06), 0 12px 40px -12px rgb(16 41 31 / 0.18);
+
+  --font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  --radius: 0; /* square corners, like the app's logo and the reference site */
+  --radius-sm: 2px;
+  --max: 1200px;
+  --gutter: clamp(16px, 4vw, 32px);
+  --section: clamp(40px, 5.5vw, 72px);
+  --header-h: 56px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --forest: #bfe24b;
+    --on-forest: #10291f;
+    --bg: #0b1a15;
+    --paper: #10241d;
+    --surface: #10241d;
+    --surface-alt: #163028;
+    --line: #24413a;
+    --text: #f1efe7;
+    --muted: #8fa397;
+    --selection: #bfe24b;
+    --dot: rgb(241 239 231 / 0.07);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 48px -16px rgb(0 0 0 / 0.6);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --forest: #bfe24b;
+  --on-forest: #10291f;
+  --bg: #0b1a15;
+  --paper: #10241d;
+  --surface: #10241d;
+  --surface-alt: #163028;
+  --line: #24413a;
+  --text: #f1efe7;
+  --muted: #8fa397;
+  --selection: #bfe24b;
+  --dot: rgb(241 239 231 / 0.07);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 48px -16px rgb(0 0 0 / 0.6);
+  color-scheme: dark;
+}

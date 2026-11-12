@@ -1,0 +1,31 @@
+---
+// "Download for Windows  v0.2.0": links to the site's download page for that OS.
+import { downloadPage, downloads, release, type Os } from "../site";
+import Icon from "./Icon.astro";
+
+interface Props {
+  os: Os;
+  variant?: "primary" | "secondary";
+  size?: "md" | "lg";
+  class?: string;
+}
+const { os, variant = "primary", size = "lg", class: cls } = Astro.props;
+---
+<a
+  href={downloadPage(os)}
+  class:list={["btn", `btn-${variant}`, { "btn-lg": size === "lg" }, "dl-btn", cls]}
+  data-download={os}
+>
+  <Icon name={os} />
+  <span>Download for {downloads[os].label}</span>
+  <span class="ver">v{release.version}</span>
+</a>
+
+<style>
+  .dl-btn { justify-content: center; }
+  .dl-btn .ver { margin-left: auto; padding-left: 12px; }
+  @media (max-width: 400px) {
+    .dl-btn.btn-lg { padding-inline: 16px; gap: 10px; font-size: 1rem; }
+    .dl-btn .ver { padding-left: 4px; }
+  }
+</style>

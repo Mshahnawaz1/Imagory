@@ -29,6 +29,7 @@ Create new modules as the work needs them.
   - `__main__.py`: entry point. Calls `multiprocessing.freeze_support()` first.
 - `tests/`: pytest unit and integration tests. Fixtures are generated in code, not committed image files.
 - `scripts/`: dev tools such as the 100,000-photo fake library generator (PRD §10).
+- `frontend/`: the project website (Astro, static, deployed on Vercel to `imagory.mshahnawaz.me`). Separate from the app: its own `package.json`, no Python. Plan and design in `frontend/design.md`.
 - `pyproject.toml` + committed `uv.lock`. `LICENSE` (MIT) at the root.
 
 ## Architecture rules
@@ -83,4 +84,4 @@ Create new modules as the work needs them.
 - If a change alters scope, architecture, the schema, or a decision, update `PRD.md` (including the decisions log in §16) in the same change, or flag the mismatch.
 - Update `README.md` when user-facing behaviour, setup, or build steps change. The README must state the offline/privacy promise prominently (PRD §11).
 - Use the terms in `GLOSSARY.md` (File, Photo, Primary file, Copy, …). When a new domain term settles, add it there; it holds definitions only, no implementation details.
-- Live docs are `PRD.md`, `GLOSSARY.md`, `README.md` and `docs/` (`tasks.md`, `setup.md` for builds, `takeout-cleanup.md`, `architecture.md`). Finished plans, agent notes and work logs go to `docs/archive/` and are not kept up to date.
+- Live docs are `PRD.md`, `GLOSSARY.md`, `README.md` and `docs/` (`tasks.md`, `setup.md` for builds, `takeout-cleanup.md`, `architecture.md`) and `frontend/design.md` (the website). When user-facing behaviour changes, update the site docs in `frontend/src/content/docs/` too. Finished plans, agent notes and work logs go to `docs/archive/` and are not kept up to date.

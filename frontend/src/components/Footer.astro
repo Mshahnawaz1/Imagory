@@ -1,0 +1,49 @@
+---
+import { Image } from "astro:assets";
+import logo from "../assets/logo.svg";
+import logoDark from "../assets/logo-dark.svg";
+import { footer } from "../site";
+const year = new Date().getFullYear();
+---
+<footer class="site-footer">
+  <div class="container grid">
+    <div class="about">
+      <a href="/" aria-label="Imagory home">
+        <Image src={logo} alt="" class="logo logo-light" height={28} width={107} />
+        <Image src={logoDark} alt="" class="logo logo-dark" height={28} width={107} />
+      </a>
+      <p class="muted">An offline photo browser for local folders and Google Takeout exports.</p>
+      <p class="muted small">The app makes no network connections. Your photos never leave your computer.</p>
+    </div>
+    {footer.map((col) => (
+      <div>
+        <h2 class="col-title">{col.title}</h2>
+        <ul>
+          {col.links.map((l) => (
+            <li><a href={l.href} {...(l.href.startsWith("http") ? { rel: "noopener" } : {})}>{l.label}</a></li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </div>
+  <div class="container legal muted">
+    <span>© {year} Imagory · Free and open source, MIT licence</span>
+  </div>
+</footer>
+<style>
+  .site-footer { border-top: 1px solid var(--line); background: var(--bg); padding-top: 64px; }
+  .grid { display: grid; grid-template-columns: 2fr repeat(3, 1fr); gap: 32px; }
+  .about p { max-width: 36ch; margin-top: 16px; }
+  .small { font-size: .9rem; }
+  .logo { height: 28px; width: auto; }
+  .logo-dark { display: none; }
+  :global(:root[data-theme-resolved="dark"]) .logo-light { display: none; }
+  :global(:root[data-theme-resolved="dark"]) .logo-dark { display: block; }
+  .col-title { font-size: .875rem; color: var(--text); font-weight: 600; margin-bottom: 14px; }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; font-size: .9rem; }
+  a { color: var(--muted); text-decoration: none; }
+  ul a:hover { color: var(--text); }
+  ul a:hover { color: var(--selection); text-decoration: underline; }
+  .legal { border-top: 1px solid var(--line); margin-top: 48px; padding-block: 24px; font-size: .9rem; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr 1fr; } .about { grid-column: 1 / -1; } }
+</style>
