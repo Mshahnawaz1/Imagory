@@ -12,3 +12,5 @@ dist/
 .bench-library/
 agents_docs/
 .claude/
+# Local skill installs (npx skills); not part of the project
+skills-lock.json
