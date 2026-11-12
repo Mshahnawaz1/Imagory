@@ -91,7 +91,7 @@ The code is split into small modules with one job each. The UI never touches fil
 
 ### 6.3 Scan pipeline
 
-1. **Walk** the source with `os.scandir`, collecting path, size, and modified time. This step is fast and does not open files.
+1. **Walk** the source with `os.scandir`, collecting path, size, and modified time. This step is fast and does not open files. Each folder's entries are sorted by name (case-insensitive), so the scan order, and with it which copy wins when copies of a photo disagree, is the same on every filesystem.
 2. **Diff** against the `files` table: new, changed (size or modified time differs), unchanged, disappeared.
 3. **Process** new and changed files in the worker pool (metadata, hash, thumbnail). Unchanged files are skipped entirely.
 4. **Apply** results: insert or update file rows, attach each file to a photo by its hash, and recompute the photo's primary file and date.
@@ -433,6 +433,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | V1 | Sources, Takeout folders, exact duplicates, grid, viewer, search and filters, albums |
 | Takeout zips | V1.5 |
 | Architecture | One database writer thread, worker processes for CPU work, commit per batch |
+| Walk order (2026-11-12) | Each folder's entries are sorted by name (casefold) during the walk. `os.scandir` order differs by filesystem (NTFS is sorted, ext4 is not), so where copies of one photo disagree (a person's name case, a caption) the first file seen won differently on Linux and Windows |
 | Photo identity | Content hash (BLAKE2b); albums reference photos |
 | Duplicates | Exact hash, hidden not deleted, "Has duplicates" filter |
 | Primary file | First non-missing file by source added date, then first seen |

@@ -92,7 +92,9 @@ def walk_source(
         dir_path, rel_dir = stack.pop()
         try:
             with os.scandir(dir_path) as entries:
-                children = list(entries)
+                # Sorted, so every filesystem walks in the same order: when copies of a photo
+                # disagree (a person's case, a caption), the first one seen wins (PRD §6.3).
+                children = sorted(entries, key=lambda e: (e.name.casefold(), e.name))
         except OSError as exc:
             log.warning("Cannot read folder %s: %s", dir_path, exc)
             continue
