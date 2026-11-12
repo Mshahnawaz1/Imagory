@@ -33,7 +33,7 @@ from imagory.cleanup.types import CleanupError, CleanupReport, NotEnoughSpace, R
 from imagory.thumbs import hash_bytes
 from tests.fs_snapshot import assert_unchanged, snapshot
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "make_fake_library.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "make_fake_library.py"
 GP = "Google Photos"
 YEAR04 = f"{GP}/Photos from 2004"
 ALBUM = f"{GP}/Cleanup album"

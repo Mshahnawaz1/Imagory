@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "make_fake_library.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "make_fake_library.py"
 GP = "Takeout/Google Photos"
 
 

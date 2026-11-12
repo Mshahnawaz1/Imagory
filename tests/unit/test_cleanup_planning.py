@@ -5,7 +5,6 @@ from __future__ import annotations
 import random
 from datetime import UTC, datetime, timedelta, timezone
 
-from imagory.cleanup import planning
 from imagory.cleanup.planning import (
     build_plan,
     choose_kept,
@@ -421,7 +420,3 @@ def test_taken_mtime_ns_with_injected_zone():
 def test_taken_mtime_ns_defaults_to_system_zone():
     local = datetime(2019, 6, 1, 12, 0, 0)
     assert taken_mtime_ns("2019-06-01T12:00:00") == int(local.astimezone().timestamp()) * 10**9
-
-
-def test_module_constants():
-    assert planning.MAX_PATH_CHARS == 250

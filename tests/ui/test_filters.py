@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import random
-import time
 
 import pytest
 
@@ -234,65 +232,6 @@ def test_no_sort_step_without_text(conn, lib):
         plan = " ".join(r[3] for r in conn.execute(query, params))
         assert "INDEX idx_photos_taken_at_local" in plan, plan
         assert "USE TEMP B-TREE FOR ORDER BY" not in plan, plan  # only the tie-break is sorted
-
-
-def test_perf(conn, capsys):
-    # 10,000 photos by default; run with IMAGORY_PERF_N=100000 for the PRD size.
-    n = int(os.environ.get("IMAGORY_PERF_N", "10000"))
-    s1, s2 = add_source(conn, "A"), add_source(conn, "B")
-    rnd = random.Random(1)
-    photos, files = [], []
-    for i in range(1, n + 1):
-        y, m, d = rnd.randint(2005, 2025), rnd.randint(1, 12), rnd.randint(1, 28)
-        taken = f"{y}-{m:02d}-{d:02d}T12:00:00" if i % 50 else None
-        photos.append((i, f"h{i}", None, taken))
-        folder = f"{rnd.randint(2005, 2025)}/Event {i % 300}"
-        status = "missing" if i % 100 == 1 else "ok"
-        files.append((i, s1, i, f"{folder}/IMG_{i:06d}.jpg", status))
-        if i % 10 == 0:
-            files.append((n + i, s2, i, f"Takeout/{folder}/IMG_{i:06d}.jpg", "ok"))
-    with db.transaction(conn):
-        conn.executemany(
-            "INSERT INTO photos (id, content_hash, primary_file_id, taken_at_local) "
-            "VALUES (?,?,?,?)",
-            photos,
-        )
-        conn.executemany(
-            "INSERT INTO files (id, source_id, photo_id, relative_path, size, modified_time, "
-            "status, "
-            "first_seen_at, last_seen_at) VALUES (?,?,?,?,1,1,?,'z','z')",
-            files,
-        )
-        conn.execute("UPDATE photos SET primary_file_id = id")
-    cases = {
-        "none": PhotoFilter(),
-        "text": PhotoFilter(text="event 17"),
-        "date": PhotoFilter(date_from="2020-01-01", date_to="2020-12-31"),
-        "source": PhotoFilter(source_ids=frozenset({s2})),
-        "folder": PhotoFilter(folder=(s1, "2015")),
-        "dups": PhotoFilter(has_duplicates=True),
-        "missing": PhotoFilter(missing=True),
-        "combo": PhotoFilter(text="event", date_from="2010-01-01", has_duplicates=True),
-    }
-    lines = []
-    for name, f in cases.items():
-        t0 = time.perf_counter()
-        first = db.filtered_grid_photos(conn, f, 200)
-        t1 = time.perf_counter()
-        rows = db.filtered_grid_photos(conn, f)
-        t2 = time.perf_counter()
-        counts = db.filtered_month_counts(conn, f)
-        t3 = time.perf_counter()
-        assert sum(n for _, n in counts) == len(rows) and rows[:200] == first
-        lines.append(
-            f"{name:8} rows={len(rows):6} first200={t1 - t0:.3f}s all={t2 - t1:.3f}s "
-            f"months={t3 - t2:.3f}s"
-        )
-    with capsys.disabled():
-        print("\n" + "\n".join(lines))
-    t0 = time.perf_counter()
-    db.folder_paths(conn, s1)
-    assert time.perf_counter() - t0 < 2
 
 
 # --- filter bar widget ---------------------------------------------------------------------

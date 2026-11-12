@@ -189,8 +189,8 @@ def test_change_type_recomputes_dates_and_reorders_grid(qtbot, tmp_path, no_dial
 
     from PySide6.QtWidgets import QInputDialog
 
-    from tests.test_date_recompute import make_source
-    from tests.test_scan import snapshot
+    from tests.integration.test_date_recompute import make_source
+    from tests.integration.test_scan import snapshot
 
     src_dir = make_source(tmp_path)
     before = snapshot(src_dir)

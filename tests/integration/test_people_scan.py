@@ -10,7 +10,7 @@ from imagory import db, paths, takeout
 from imagory.scanner import Scanner
 from tests.db_helpers import count
 from tests.imaging import make_image
-from tests.test_scan import snapshot
+from tests.integration.test_scan import snapshot
 
 TS = datetime(2018, 6, 15, 12, 0, 0, tzinfo=UTC)
 A = "Google Photos/Photos from 2018"

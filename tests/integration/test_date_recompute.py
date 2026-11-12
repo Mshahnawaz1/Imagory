@@ -7,8 +7,8 @@ import pytest
 from imagory import db, paths, sources
 from imagory.scanner import Scanner
 from tests.imaging import make_image
-from tests.test_scan import snapshot
-from tests.test_takeout_scan import TS, YEAR, file_row, write_sidecar
+from tests.integration.test_scan import snapshot
+from tests.integration.test_takeout_scan import TS, YEAR, file_row, write_sidecar
 
 
 @pytest.fixture

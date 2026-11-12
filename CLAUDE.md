@@ -27,7 +27,7 @@ Create new modules as the work needs them.
   - `ui/`: main window, grid, viewer, dialogs. `ui/main_window/` holds `MainWindow` (layout, menus, grid, viewer, sidebar, albums) and three controllers it owns: `window.source_actions`, `window.scan` and `window.cleanup`
   - `paths.py` (or similar): library folder resolution and the bundled-resource helper (`sys._MEIPASS`)
   - `__main__.py`: entry point. Calls `multiprocessing.freeze_support()` first.
-- `tests/`: pytest unit and integration tests. Fixtures are generated in code, not committed image files.
+- `tests/`: pytest tests in three folders: `unit/` (pure logic, no database or Qt), `integration/` (database, scans and cleanup runs, no Qt) and `ui/` (Qt widgets and window wiring). Shared helpers (`conftest.py`, `db_helpers.py`, `fs_snapshot.py`, `imaging.py`) stay in `tests/`. Fixtures are generated in code, not committed image files.
 - `scripts/`: dev tools such as the 100,000-photo fake library generator (PRD §10).
 - `frontend/`: the project website (Astro, static, deployed on Vercel to `imagory.mshahnawaz.me`). Separate from the app: its own `package.json`, no Python. Plan and design in `frontend/design.md`.
 - `pyproject.toml` + committed `uv.lock`. `LICENSE` (MIT) at the root.
@@ -58,7 +58,7 @@ Create new modules as the work needs them.
 ## Commands
 - `uv sync`: install dependencies into `.venv`
 - `uv run python -m imagory`: run the app (set `IMAGORY_LIBRARY` to a scratch folder)
-- `uv run pytest -q`: run tests
+- `scripts/test.sh [unit|integration|ui|all]`: run one test category or all (default); extra args go to pytest. `uv run pytest -q` also runs everything.
 - `uv run ruff check .` and `uv run ruff format --check .`: lint and format check. `uv run ruff format .` applies formatting.
 - Add dependencies with `uv add <pkg>` (or `uv add --dev <pkg>`). Don't hand-edit `uv.lock`.
 

@@ -131,7 +131,8 @@ the main target is Windows 10/11, with a Linux x86_64 build as well.
 ```sh
 uv sync                                    # install dependencies into .venv
 IMAGORY_LIBRARY=.dev-library uv run python -m imagory   # run with a scratch library
-uv run pytest -q                           # tests
+scripts/test.sh                            # all tests
+scripts/test.sh unit                       # or one category: unit, integration, ui
 uv run ruff check . && uv run ruff format --check .
 ```
 
@@ -158,6 +159,12 @@ Time a Takeout cleanup of a generated export (the output goes into the scratch f
 
 ```sh
 uv run python scripts/bench_cleanup.py /path/to/scratch --count 50000
+```
+
+Time the search and filter queries on a throwaway database (10,000 photos by default):
+
+```sh
+uv run python scripts/bench_filters.py 100000
 ```
 
 The V1 grid prototype (100,000 in-memory items with month headers):

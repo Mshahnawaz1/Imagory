@@ -10,7 +10,7 @@ import pytest
 from imagory import db, paths
 from imagory.scanner import Scanner
 from tests.imaging import make_image
-from tests.test_scan import snapshot
+from tests.integration.test_scan import snapshot
 
 
 @pytest.fixture
