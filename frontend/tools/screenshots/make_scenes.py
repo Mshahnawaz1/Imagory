@@ -10,11 +10,10 @@ fictional people, places and an album folder).
 from __future__ import annotations
 
 import json
-import math
 import random
 import shutil
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
@@ -270,7 +269,7 @@ def random_time(rng, start, end):
 
 
 def ts(dt: datetime) -> dict:
-    u = int(dt.replace(tzinfo=timezone.utc).timestamp())
+    u = int(dt.replace(tzinfo=UTC).timestamp())
     return {"timestamp": str(u), "formatted": dt.strftime("%b %d, %Y, %I:%M:%S %p UTC")}
 
 
