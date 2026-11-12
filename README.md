@@ -191,6 +191,7 @@ the Linux one is built on Ubuntu 22.04 so it also runs on older distros.
 - [docs/takeout-cleanup.md](docs/takeout-cleanup.md): the Takeout cleanup design
 - [docs/tasks.md](docs/tasks.md): open work and what is done
 - [docs/setup.md](docs/setup.md): building on Windows and Linux
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to report bugs and contribute changes
 - [docs/archive/](docs/archive/): finished plans, agent notes and work logs, kept for history
 
 ## Licence
