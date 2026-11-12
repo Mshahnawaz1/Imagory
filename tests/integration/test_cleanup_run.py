@@ -40,12 +40,6 @@ ALBUM = f"{GP}/Cleanup album"
 ALBUM_TITLE = "Lisbon trip 2004"
 COUNT, SEED = 12, 3  # small, so the suite stays fast
 WORKERS = 2
-# Two different photos in one folder whose names differ only in case. That can't happen on
-# Windows; on Linux the scan keeps whichever it meets first and the other is copied as-is
-# ("other", no EXIF read), so tests that depend on which one won skip them.
-CASE_CLASHES = frozenset(
-    {f"Google Photos/Cleanup album/{n}" for n in ("case_pair.JPG", "Case_Pair.jpg")}
-)
 
 
 def _generate(out: Path, *args: str) -> dict:
@@ -245,8 +239,6 @@ def test_copies_get_their_taken_time_as_mtime(run):
     truth, by_hash, out = run["truth"], run["by_hash"], run["output"]
     for gid, members in media_groups(truth).items():
         rel = by_hash[truth["groups"][gid]["hash"]]
-        if any(m in CASE_CLASHES for m in members):
-            continue  # skipped by the scan on Linux, so its EXIF isn't read (see CASE_CLASHES)
         mtime = (out / rel).stat().st_mtime_ns
         best = group_best(truth, gid)
         if best is not None:
@@ -437,9 +429,9 @@ def test_cancel_during_analysis_then_resume(tmp_path, stage, run):
         assert p.run_id == 1
         _no_duplicate_rows(p.conn, p.run_id)
     ref = run["preview"]
-    # photos and other files are compared together: see CASE_CLASHES.
-    assert (preview.photos + preview.other_files, preview.json_files, preview.duplicates) == (
-        ref.photos + ref.other_files,
+    assert (preview.photos, preview.other_files, preview.json_files, preview.duplicates) == (
+        ref.photos,
+        ref.other_files,
         ref.json_files,
         ref.duplicates,
     )

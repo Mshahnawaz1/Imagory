@@ -776,7 +776,7 @@ def test_sqlite_file_uri():
 
 def test_output_folder_with_odd_characters_opens(lib, tmp_path):
     root, conn = lib
-    out = tmp_path / "Fotos #1 100% why?"
+    out = tmp_path / "Fotos #1 100% été"  # no "?": Windows forbids it (the uri test covers it)
     build_run(out, standard_items())
     before = snapshot(out)
     source = sources.add_cleaned_source(conn, out)

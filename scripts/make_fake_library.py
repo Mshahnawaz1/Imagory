@@ -758,7 +758,7 @@ def _add_cleanup_cases(out: Path, plan: _TakeoutPlan, seed: int) -> dict[str, di
         )  # fmt: skip
 
     p1 = photo(CL_YEAR, "IMG_20040315_101010.jpg", (3, 15), (10, 10, 10))
-    case_a = photo(CL_YEAR, "Case_Pair.jpg", (6, 10), (9, 0, 0))
+    photo(CL_YEAR, "Case_Pair.jpg", (6, 10), (9, 0, 0))
     photo(CL_ALBUM, "case_pair.JPG", (6, 11), (9, 0, 0))  # title differs only in case
     photo(CL_YEAR, "a_b_c.jpg", (5, 2), (8, 30, 0), title="a/b:c.jpg")
     photo(CL_YEAR, "Trip_ day 1.jpg", (5, 3), (8, 30, 0), title="Trip: day 1.jpg")
@@ -775,7 +775,7 @@ def _add_cleanup_cases(out: Path, plan: _TakeoutPlan, seed: int) -> dict[str, di
     _run_pool(_make_takeout_one, plan.specs[start:], 16)
 
     # Exact duplicates of P1: a copy under another name in the same folder (no sidecar), an
-    # album copy with sidecar, and a Trash copy. Plus an album copy of the case-pair photo.
+    # album copy with sidecar, and a Trash copy.
     p1_entry = plan.images[p1]
     p1_local, p1_utc = datetime(2004, 3, 15, 11, 10, 10), datetime(2004, 3, 15, 10, 10, 10)
     p1_bare = _expected(None, p1_local, p1_utc, "")  # no sidecar: the EXIF time decides
@@ -788,8 +788,6 @@ def _add_cleanup_cases(out: Path, plan: _TakeoutPlan, seed: int) -> dict[str, di
         dst, side = _copy_with_sidecar(out, p1, folder, name, side_src)
         expected = p1_entry["expected"] if with_side else p1_bare
         plan.images[dst] = {**p1_entry, "sidecar": side, "copy_of": p1, "expected": expected}
-    dst, side = _copy_with_sidecar(out, case_a, CL_ALBUM, None, plan.images[case_a]["sidecar"])
-    plan.images[dst] = {**plan.images[case_a], "sidecar": side, "copy_of": case_a}
 
     def media(folder, name, data, utc, style=None, ftime="", companion_of=None):
         """A non-image file (video, MOV, HEIC) with an optional sidecar, as plain bytes."""

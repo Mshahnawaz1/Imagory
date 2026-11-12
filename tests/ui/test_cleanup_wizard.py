@@ -103,7 +103,7 @@ def test_refused_output_blocks_next(wiz, state):
     state["mode"] = "refused"
     wiz.set_input(IN)
     wiz.set_output(OUT)
-    assert wiz.output_message.text() == "msg for /out"
+    assert wiz.output_message.text() == f"msg for {OUT}"
     assert not wiz.output_next.isEnabled()
     state["mode"] = "add"
     wiz.set_output(OUT)
