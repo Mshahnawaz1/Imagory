@@ -9,7 +9,7 @@ const entries = (await getCollection("changelog")).sort(
 const rendered = await Promise.all(entries.map(async (e) => ({ e, Content: (await render(e)).Content })));
 const fmt = (d: Date) => d.toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
 ---
-<Base title="Changelog" description="What changed in each Imagory release.">
+<Base title="Changelog" description="Release notes for Imagory, the offline photo viewer: new features, fixes and changes in each version, newest first.">
   <div class="container wrap">
     <h1>Releases</h1>
     <p class="lead">What changed in each version of Imagory, newest first.</p>

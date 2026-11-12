@@ -11,8 +11,11 @@ interface Props {
   noindex?: boolean;
 }
 const { title, description, image = "/og.png", noindex = false } = Astro.props;
-const fullTitle = Astro.url.pathname === "/" ? title : `${title} · Imagory`;
-const canonical = new URL(Astro.url.pathname, Astro.site);
+// build.format "file" makes the build-time path end in ".html" ("/index.html" for
+// home), but Vercel serves clean URLs, so strip the extension for the public path.
+const path = Astro.url.pathname.replace(/(?:\/index)?\.html$/, "") || "/";
+const fullTitle = path === "/" ? title : `${title} · Imagory`;
+const canonical = new URL(path, Astro.site);
 const ogImage = new URL(image, Astro.site);
 ---
 <!doctype html>

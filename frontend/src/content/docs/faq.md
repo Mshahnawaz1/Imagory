@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Short answers to common questions about Imagory.
+description: Answers to common questions about Imagory, including privacy, photo formats, Google Takeout, duplicates and whether it changes your photos.
 group: Help
 order: 2
 ---
