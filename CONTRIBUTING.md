@@ -52,20 +52,27 @@ cd Imagory
 uv sync
 ```
 
-Run the app against a **scratch library**, so your real one is never touched:
+### Running the app
+
+Always run against the **dev library** (`.dev-library` in the repo, git-ignored), so your
+real library is never touched. On Linux or WSL:
 
 ```sh
-IMAGORY_LIBRARY=.dev-library uv run python -m imagory            # Linux / WSL
+scripts/dev_run.sh
 ```
+
+On Windows (PowerShell), from the repo folder:
 
 ```powershell
-$env:IMAGORY_LIBRARY = ".dev-library"; uv run python -m imagory  # Windows PowerShell
+$env:IMAGORY_LIBRARY = "$PWD\.dev-library"; uv run python -m imagory
 ```
 
-On WSL, `scripts/dev_run.sh` also sets up WSLg and generates a small folder of fake photos to
-add as a source.
+Then add your photo folders in the app with **Add a folder…**. Imagory only reads them. The
+dev library keeps its database, thumbnails, and logs between runs, so earlier scans are still
+there the next time you start the app. Delete `.dev-library` to start from an empty library.
+On WSL, the script also points Qt at WSLg's display.
 
-Generate test photos instead of using your own:
+If you'd rather not use your own photos, generate fake ones and add that folder instead:
 
 ```sh
 uv run python scripts/make_fake_library.py .fake-library --count 1000
