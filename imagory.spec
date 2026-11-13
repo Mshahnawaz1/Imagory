@@ -22,8 +22,10 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[("LICENSE", "."), ("THIRD_PARTY_LICENSES.txt", "."), ("assets", "assets")],
-    hiddenimports=["pillow_heif"],
-    excludes=["tkinter", "unittest", "pydoc", "pytest", *QT_EXCLUDES],
+    hiddenimports=["pi_heif"],
+    # pillow_heif is a dev-only dependency (it writes HEIC test fixtures); it bundles the GPLv2
+    # x265 encoder and must never ship. The app decodes HEIC with pi_heif.
+    excludes=["tkinter", "unittest", "pydoc", "pytest", "pillow_heif", *QT_EXCLUDES],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

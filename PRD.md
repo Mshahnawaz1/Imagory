@@ -45,7 +45,7 @@ Imagory is a free, open source, fully offline Windows application that helps non
 | Project and dependency management | uv (`pyproject.toml` plus a committed `uv.lock`) |
 | UI framework | PySide6 (Qt 6) |
 | Storage | SQLite (Python built-in sqlite3) |
-| Image reading | Pillow, plus pillow-heif for HEIC |
+| Image reading | Pillow, plus pi-heif (decode-only pillow-heif) for HEIC |
 | Hashing | BLAKE2b from Python hashlib (built in, fast), read in 1 MB chunks |
 | Packaging | PyInstaller. Single-file .exe first, zipped folder build added later; a single-file Linux binary in a `.tar.gz` from the same spec (section 13) |
 | Tests | pytest |
@@ -383,7 +383,7 @@ cleanup_copies id, run_id, file_id NULL, extra_file_id NULL, source_relative_pat
 - Published on GitHub releases. Free, unsigned at first. The README warns that Windows SmartScreen or antivirus may show warnings, and explains how to proceed.
 - **Size expectation:** roughly 30 to 60 MB, reducible to roughly 25 to 40 MB with a clean virtual environment, excluded modules, and unneeded Qt plugins removed. Measured on Windows 11 (V1, 2026-10-31): 49.4 MB.
 - **Licensing:** all Imagory code is released under the **MIT licence** (a `LICENSE` file in the repository root, and the licence shown in the app's About dialog).
-- **Third-party components** bundled in the .exe keep their own licences, which MIT does not replace. The release includes a `THIRD_PARTY_LICENSES.txt` with their licence texts. Main ones: PySide6/Qt (LGPL; because Imagory's source and build instructions are public, users can rebuild with a different Qt version, which is the usual way to comply for a single-file build), Pillow (MIT-CMU), and pillow-heif with its bundled codecs. Verify the pillow-heif codec licences before the first release (section 18). Only dependencies with permissive or LGPL licences are added, so the app can stay MIT.
+- **Third-party components** bundled in the .exe keep their own licences, which MIT does not replace. The release includes a `THIRD_PARTY_LICENSES.txt` with their licence texts. Main ones: PySide6/Qt (LGPL), Pillow (MIT-CMU), and pi-heif (BSD-3) with libheif and libde265 (LGPLv3; the Windows wheels add the MinGW runtime under the GCC Runtime Library Exception). Because Imagory's source and build instructions are public, users can rebuild with a different Qt or libheif, which is the usual way to meet the LGPL for a single-file build. HEIC is decoded with pi-heif, the decode-only build of pillow-heif; pillow-heif itself bundles the GPLv2 x265 encoder, so it is a dev-only dependency (it writes HEIC test fixtures) and the spec excludes it from the build. Only dependencies with permissive or LGPL licences ship, so the app can stay MIT.
 
 ## 14. Proposed future work
 
@@ -511,6 +511,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Editable people | Not in V1: people from Takeout are read-only. Planned for V1.x and flagged as needing planning (section 14). Considered and rejected: storing people as albums, because a rescan would undo manual edits (scans touch people but never albums) |
 | Grid query thread | The grid's background query runs on a one-thread `QThreadPool` (`GridQuery`), not a new `QThread` per reload: deleting finished `QThread`s intermittently crashed the UI tests ("pure virtual method called"). Root cause in C++ still unknown; details in `docs/archive/issues.md` |
 | `db` package (2026-11-09) | `db.py` (2,700 lines) split into `imagory/db/`, one module per area, for readability. `imagory.db` re-exports every public name, so call sites are unchanged and "all SQL in one place" now means the package. Helpers shared between modules keep their leading underscore and are imported explicitly |
+| HEIC decoder (2026-11-13) | Decode HEIC with `pi-heif` (decode-only, LGPL wheels) instead of `pillow-heif`, whose wheels bundle the GPLv2 x265 encoder. Imagory only reads photos, so it needs no encoder, and the app stays MIT. `pillow-heif` stays a dev dependency for test fixtures and is excluded from the build. Rejected: relicensing to GPL, a custom libheif build, dropping HEIC. The 0.2.0 binaries still contain x265 |
 | Website (2026-11-12) | Static Astro site in `frontend/` on Vercel (`imagory.mshahnawaz.me`), no Starlight; layout modelled on themia.app with Imagory's colours. Version typed by hand in `src/site.ts`; downloads link to GitHub release files. The **website** uses cookieless Vercel Web Analytics (page views, downloads through `/download/<os>` pages); this does not change section 11, which covers the **app**. The site must not claim "no tracking" |
 
 ## 17. Risks
@@ -520,14 +521,14 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 - **Executable size and antivirus:** single-file PyInstaller builds are large and often flagged when unsigned. Mitigated later by the folder build.
 - **Scale:** scan time and grid smoothness at 100,000 photos need measurement.
 - **Database safety:** cloud-synced folders can corrupt SQLite. Mitigated by the warning and the pre-migration backup.
-- **Licensing:** pillow-heif codec licences and LGPL obligations for PySide6 must be checked before release. Face model weights (V2) may restrict use.
+- **Licensing:** a dependency update could pull a GPL component into the build (as pillow-heif's x265 encoder did in 0.2.0). Check `THIRD_PARTY_LICENSES.txt` and the bundled binaries on each release. Face model weights (V2) may restrict use.
 - **Scope creep:** faces, zips, and portable mode stay out of V0 and V1.
 - **Duplicate limits:** exact-hash detection misses edited or re-saved copies, and users may expect more.
 
 ## 18. Open questions
 
 1. **Date priority:** validate the rules in section 8.4 on a real Takeout export.
-2. **pillow-heif licences:** the pillow-heif 1.8 wheels bundle libheif and libde265 (LGPLv3) and **x265 (GPLv2)**, and state that the binary wheels are GPLv2 as a whole (the Windows wheels add the MinGW runtime). Distributing the .exe with them would make the bundled binary GPLv2, which conflicts with the permissive/LGPL-only dependency rule. Options: accept GPLv2 for the binary, build a decode-only libheif without x265, or drop HEIC. Decide before the first public release.
+2. **pillow-heif licences:** resolved 2026-11-13 by switching to pi-heif (see the HEIC decoder decision in section 16).
 3. **Competitor check:** test digiKam and Immich on a real Takeout export before building V1.
 4. **Zip handling (V1.5):** read inside zips or extract to an app-managed folder.
 5. **V2 details:** confirm faces as a downloadable extension and its position on the roadmap.

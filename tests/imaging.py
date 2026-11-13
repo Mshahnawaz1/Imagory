@@ -29,6 +29,7 @@ def make_image(
             exif.get_ifd(0x8769)[0x9003] = taken
         kwargs["exif"] = exif.tobytes()
     if fmt == "HEIF":
+        # pillow-heif (dev-only) can encode; the app itself decodes with pi-heif.
         from pillow_heif import register_heif_opener
 
         register_heif_opener()

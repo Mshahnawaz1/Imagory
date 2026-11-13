@@ -8,7 +8,7 @@ from __future__ import annotations
 from importlib import metadata
 from pathlib import Path
 
-BUNDLED = ["PySide6_Essentials", "shiboken6", "pillow", "pillow_heif"]
+BUNDLED = ["PySide6_Essentials", "shiboken6", "pillow", "pi_heif"]
 OUT = Path(__file__).resolve().parents[1] / "THIRD_PARTY_LICENSES.txt"
 
 HEADER = """\
@@ -21,9 +21,11 @@ contains the components below, which keep their own licences. Their licence text
 PySide6 / Qt is used under the LGPL v3. Imagory's source code and build instructions are
 public, so you can rebuild Imagory against a different Qt version.
 
-NOTE (open question, PRD section 18): the pillow-heif binary wheels bundle libheif and
-libde265 (LGPLv3) and x265 (GPLv2), which makes the pillow-heif binary GPLv2 as a whole.
-This must be resolved before the first public release.
+HEIC support comes from pi-heif, the decode-only build of pillow-heif. Its binary wheels
+bundle libheif and libde265 (LGPLv3) and no encoders. On Windows they also bundle the
+MinGW runtime: libgcc and libstdc++ (GPLv3 with the GCC Runtime Library Exception, which
+allows use in programs under any licence) and libwinpthread (MIT). Imagory's source code
+and build instructions are public, so you can rebuild it against your own libheif.
 """
 
 

@@ -205,6 +205,6 @@ the Linux one is built on Ubuntu 22.04 so it also runs on older distros.
 
 Imagory is released under the [MIT licence](LICENSE). Bundled third-party components keep
 their own licences, listed in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).
-PySide6/Qt is used under the LGPL v3. Note: the pillow-heif binary wheels (HEIC support)
-bundle the GPLv2 x265 library. This is an open question to resolve before the first public
-release (PRD §18).
+PySide6/Qt and the HEIC decoder (libheif, libde265, through pi-heif) are used under the LGPL
+v3. Release 0.2.0 bundled pillow-heif, which includes the GPLv2 x265 encoder; later releases
+use the decode-only pi-heif instead (PRD §16).

@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+import textwrap
 
 from PIL import Image
 
@@ -56,6 +59,25 @@ def test_gif_and_heic(tmp_path):
         result = thumbs.process_file(str(src), str(tmp_path / "thumbs"), _job(img, src))
         assert result.error is None, result.error
         assert (result.width, result.height) == (40, 30)
+
+
+def test_heic_is_decoded_without_pillow_heif(tmp_path):
+    """The app reads HEIC with pi-heif alone; pillow-heif (GPLv2 x265) is dev-only (PRD §13)."""
+    src = tmp_path / "src"
+    make_image(src / "e.heic", (40, 30))  # written with pillow-heif, the dev-only encoder
+    code = textwrap.dedent(
+        f"""
+        import sys
+        from imagory import thumbs
+        job = thumbs.FileJob("e.heic", 0, 0)
+        result = thumbs.process_file({str(src)!r}, {str(tmp_path / "thumbs")!r}, job)
+        assert result.error is None, result.error
+        assert (result.width, result.height) == (40, 30)
+        assert "pi_heif" in sys.modules
+        assert "pillow_heif" not in sys.modules
+        """
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, cwd=os.getcwd())
 
 
 def test_corrupt_file_returns_error(tmp_path):

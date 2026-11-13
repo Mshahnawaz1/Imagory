@@ -7,9 +7,11 @@ contains the components below, which keep their own licences. Their licence text
 PySide6 / Qt is used under the LGPL v3. Imagory's source code and build instructions are
 public, so you can rebuild Imagory against a different Qt version.
 
-NOTE (open question, PRD section 18): the pillow-heif binary wheels bundle libheif and
-libde265 (LGPLv3) and x265 (GPLv2), which makes the pillow-heif binary GPLv2 as a whole.
-This must be resolved before the first public release.
+HEIC support comes from pi-heif, the decode-only build of pillow-heif. Its binary wheels
+bundle libheif and libde265 (LGPLv3) and no encoders. On Windows they also bundle the
+MinGW runtime: libgcc and libstdc++ (GPLv3 with the GCC Runtime Library Exception, which
+allows use in programs under any licence) and libwinpthread (MIT). Imagory's source code
+and build instructions are public, so you can rebuild it against your own libheif.
 
 ==============================================================================
 PySide6_Essentials 6.12.0  (LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only)
@@ -2450,11 +2452,11 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
-pillow_heif 1.8.1  (BSD-3-Clause)
+pi_heif 1.4.0  (BSD-3-Clause)
 https://github.com/bigcat88/pillow_heif
 ==============================================================================
 
---- pillow_heif-1.8.1.dist-info/licenses/LICENSE.txt ---
+--- pi_heif-1.4.0.dist-info/licenses/LICENSE.txt ---
 
 Copyright (c) 2021-2023, Pillow-Heif contributors.
 All rights reserved.
@@ -2487,32 +2489,20 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
---- pillow_heif-1.8.1.dist-info/licenses/LICENSES_bundled.txt ---
+--- pi_heif-1.4.0.dist-info/licenses/LICENSES_bundled.txt ---
 
-The "pillow-heif" source code is licensed under the BSD-3-Clause license, see LICENSE.txt.
-License for "pillow-heif" binary wheels: GPLv2, due to base library licenses.
+License for "pi-heif" binary wheels: LGPLv3, due to base library licenses.
 
 Binary wheels combine several license-compatible libraries. Here they are listed.
 
 Name: libheif
 License: LGPLv3
 Files: libheif.[dylib|so|dll]
-  For details, see https://github.com/strukturag/libheif/tree/v1.23.6/COPYING
-  Source code: https://github.com/strukturag/libheif/tree/v1.23.6
+  For details, see https://github.com/strukturag/libheif/tree/v1.18.1/COPYING
+  Source code: https://github.com/strukturag/libheif/tree/v1.18.1
 
 Name: libde265
 License: LGPLv3
 Files: libde265.[dylib|so|dll]
-  For details, see https://github.com/strukturag/libde265/tree/v1.1.3/COPYING
-  Source code: https://github.com/strukturag/libde265/tree/v1.1.3
-
-Name: x265
-License: GPLv2
-Files: libx265.[dylib|so|dll]
-  For details, see https://github.com/Multicorewareinc/x265/tree/4.3/COPYING
-  Source code: https://github.com/Multicorewareinc/x265/tree/4.3
-
-Name: MinGW-w64 runtime (Windows wheels only)
-License: GPL-3.0-with-GCC-exception (libgcc, libstdc++), MIT and BSD (libwinpthread)
-Files: libgcc_s_seh-1.dll, libstdc++-6.dll, libwinpthread-1.dll
-  For details, see https://sourceforge.net/p/mingw-w64/mingw-w64/ci/master/tree/COPYING
+  For details, see https://github.com/strukturag/libde265/tree/v1.0.15/COPYING
+  Source code: https://github.com/strukturag/libde265/tree/v1.0.15

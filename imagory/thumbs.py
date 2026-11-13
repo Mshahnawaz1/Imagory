@@ -37,7 +37,8 @@ def register_heif() -> None:
     """Teach Pillow to open HEIC/HEIF files (once per process)."""
     global _heif_registered
     if not _heif_registered:
-        from pillow_heif import register_heif_opener
+        # pi-heif is the decode-only build of pillow-heif: no x265 encoder, LGPL wheels (PRD §13).
+        from pi_heif import register_heif_opener
 
         register_heif_opener()
         _heif_registered = True
