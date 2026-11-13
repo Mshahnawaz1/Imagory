@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,21 @@ if TYPE_CHECKING:
     from imagory.ui.main_window.window import MainWindow
 
 log = logging.getLogger(__name__)
+
+_NAMES_SHOWN = 5  # album names listed in a confirmation before "and N more"
+
+
+def emptied_albums_note(conn: sqlite3.Connection, source_id: int) -> str:
+    """A confirmation paragraph naming the albums that removing the source deletes because
+    none of their photos would be left, or "" when there are none."""
+    names = [name for _id, name in db.source_emptied_albums(conn, source_id)]
+    if not names:
+        return ""
+    shown = ", ".join(f"“{n}”" for n in names[:_NAMES_SHOWN])
+    if len(names) > _NAMES_SHOWN:
+        shown += f" and {len(names) - _NAMES_SHOWN:,} more"
+    noun = "album" if len(names) == 1 else f"{len(names):,} albums"
+    return f"\n\nThe {noun} {shown} would be left empty and will be deleted too."
 
 
 class SourceActions:
@@ -183,7 +199,8 @@ class SourceActions:
             "Remove source",
             f"Remove “{source.label}” from Imagory?\n\n{source.root_path}\n\n"
             f"Imagory will forget its {stats.photos + stats.missing:,} photos and delete their "
-            "thumbnails. Your photos on disk are not touched.",
+            f"thumbnails.{emptied_albums_note(self.window.conn, source.id)}\n\n"
+            "Your photos on disk are not touched.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -195,6 +212,7 @@ class SourceActions:
         assert not self.window.busy
         self.window.release_grid()
         sources.remove_source(self.window.conn, self.window.thumbs_root, source_id)
+        self.window.sync_current_album()  # it may have been deleted with the source
         self.window.sources_updated()
         self.window.reload_grid()
 

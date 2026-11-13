@@ -18,6 +18,7 @@ from imagory.cleanup.types import DoneResult
 from imagory.ui.cleanup_thread import CleanupThread
 from imagory.ui.cleanup_wizard import CleanupWizard
 from imagory.ui.info_panel import show_in_explorer
+from imagory.ui.main_window.source_actions import emptied_albums_note
 
 if TYPE_CHECKING:
     from imagory.ui.main_window.window import MainWindow
@@ -324,6 +325,7 @@ class CleanupController:
                 f"\n\n{orphans:,} photo(s) only exist in the old source (for example Trash "
                 "files) and will no longer be listed."
             )
+        note += emptied_albums_note(self.window.conn, old.id)
         answer = QMessageBox.question(
             self.window,
             "Replace old source",
@@ -353,6 +355,7 @@ class CleanupController:
             swapped = False
         else:
             swapped = True
+        self.window.sync_current_album()
         self.window.sources_updated()
         self.window.reload_grid()
         self.window.refresh_sidebar()

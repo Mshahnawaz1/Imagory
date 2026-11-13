@@ -117,6 +117,45 @@ def test_delete_source_cascades_memberships(conn):
     assert len(db.list_albums(conn)) == 1
 
 
+def test_delete_source_deletes_albums_it_empties(conn):
+    s1 = db.create_source(conn, "/one", "One")
+    s2 = db.create_source(conn, "/two", "Two")
+    only = add_photo(conn, s1.id, "only.jpg")
+    other = add_photo(conn, s2.id, "other.jpg")
+    emptied = db.create_album(conn, "Only one")  # every photo is in source 1
+    mixed = db.create_album(conn, "Mixed")  # keeps a photo of source 2
+    elsewhere = db.create_album(conn, "Elsewhere")  # nothing in source 1
+    already_empty = db.create_album(conn, "Empty")  # never had photos: not this removal's doing
+    db.add_photos_to_album(conn, emptied, [only])
+    db.add_photos_to_album(conn, mixed, [only, other])
+    db.add_photos_to_album(conn, elsewhere, [other])
+
+    assert db.source_emptied_albums(conn, s1.id) == [(emptied, "Only one")]
+    db.delete_source(conn, s1.id)
+
+    assert {a.id for a in db.list_albums(conn)} == {mixed, elsewhere, already_empty}
+    assert {r[0] for r in conn.execute("SELECT photo_id FROM album_photos")} == {other}
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_delete_source_keeps_album_whose_photo_has_a_copy_elsewhere(conn):
+    s1 = db.create_source(conn, "/one", "One")
+    s2 = db.create_source(conn, "/two", "Two")
+    shared = add_photo(conn, s1.id, "shared.jpg")
+    with db.transaction(conn):  # a second file of "shared" lives in source 2
+        conn.execute(
+            "INSERT INTO files (source_id, photo_id, relative_path, size, modified_time, "
+            "first_seen_at, last_seen_at) VALUES (?, ?, 'copy.jpg', 10, 1, ?, ?)",
+            (s2.id, shared, NOW, NOW),
+        )
+    album = db.create_album(conn, "Shared")
+    db.add_photos_to_album(conn, album, [shared])
+
+    assert db.source_emptied_albums(conn, s1.id) == []
+    db.delete_source(conn, s1.id)
+    assert [(a.id, a.photo_count) for a in db.list_albums(conn)] == [(album, 1)]
+
+
 def test_album_grid_order_and_missing(conn, src):
     new = add_photo(conn, src.id, "z.jpg", "2024-06-01T00:00:00")
     old_b = add_photo(conn, src.id, "b.jpg", "2001-01-01T00:00:00")

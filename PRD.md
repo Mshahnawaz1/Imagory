@@ -175,7 +175,7 @@ Hashing, duplicate detection, moved-file detection, Takeout parsing, filename da
 - A **source** is a folder the user adds and gives a label (for example "Account A Takeout" or "Phone backup"). Multiple sources live in one library.
 - **Type detection:** a folder is detected as Takeout if it, or a direct child, is named "Google Photos" (or its localized name), or if JSON sidecars sit next to a large share of its images. The "Add source" dialog shows the detected type, and the user can change it. Changing the type later recomputes dates for that source.
 - **Relocate source:** if a drive letter changes or a folder is moved, the user points the source to its new location. Only `root_path` changes, because file paths are stored relative to the source root.
-- **Remove source:** after confirmation, deletes that source's rows from the database. Photos left with no files are removed along with their album memberships. Files on disk are never touched.
+- **Remove source:** after confirmation, deletes that source's rows from the database. Photos left with no files are removed along with their album memberships, and albums left with no photos are deleted too (the confirmation names them; albums that were already empty stay). Files on disk are never touched.
 
 ### 8.2 Scanning, rescanning, and missing files
 
@@ -466,7 +466,7 @@ Do not copy digiKam code. It is GPL-licensed and Imagory is MIT.
 | Takeout detection | Folder names only, no file opens: a "Google Photos" folder (or localized name) at or directly under the root, or sidecar names next to at least half of a sample of images |
 | Adding a source | Refused if the folder is already a source or is inside the library folder; an overlapping folder is allowed after a warning |
 | Relocate check | A sample of 50 known relative paths is checked under the new folder, and the user confirms if few are found |
-| Remove source | Thumbnails are deleted first (they regenerate if removal stops halfway), then the rows; photos left with no files go too. Removing album memberships waits for section 8.8 |
+| Remove source | Thumbnails are deleted first (they regenerate if removal stops halfway), then the rows; photos left with no files go too, with their album memberships. Albums that had photos and are left with none are deleted in the same transaction and named in the confirmation (also the swap's), so a cleaned source removed and added again does not leave empty albums that push the re-import to `<name> (Takeout)`. Remove missing items does not delete albums |
 | Content hash | BLAKE2b, 16-byte digest (32 hex characters), computed in the worker from the single read of the file |
 | Primary file rules | First ok file by source added date, source id, first seen, file id; recomputed on every status or membership change. If all its files are missing, the first missing file stays primary so a "Missing" filter can show the photo |
 | Photo date | Best date across all of a photo's files, missing ones included, so unplugging a drive does not change dates |

@@ -555,15 +555,20 @@ class MainWindow(QMainWindow):
         dialog = AlbumsDialog(self.conn, self)
         dialog.exec()
         dialog.deleteLater()
-        if self.album is not None:  # it may have been renamed or deleted
-            current = next((a for a in db.list_albums(self.conn) if a.id == self.album.id), None)
-            if current is None:
-                self.show_album(None)
-            elif current != self.album:
-                self.album = current
-                self._update_bars()
-                self.show_photo_count()
+        self.sync_current_album()
         self.refresh_sidebar()
+
+    def sync_current_album(self) -> None:
+        """Catch up with the album being shown after it may have been renamed or deleted."""
+        if self.album is None:
+            return
+        current = next((a for a in db.list_albums(self.conn) if a.id == self.album.id), None)
+        if current is None:
+            self.show_album(None)
+        elif current != self.album:
+            self.album = current
+            self._update_bars()
+            self.show_photo_count()
 
     def selected_photo_ids(self) -> list[int]:
         ids = (self.grid_source.item(i) for i in self.grid.selected_indexes())

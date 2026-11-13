@@ -30,7 +30,7 @@ Open **Sources…** (also in the sidebar as **Manage sources…**) to see each s
 - **Change type…:** switches between plain folder and Takeout. Imagory works out the dates again.
 - **Relocate…:** use this when a drive letter changes or you moved the folder. Point the source at its new place and Imagory carries on without scanning from scratch.
 - **Remove missing…:** makes Imagory forget the files it can no longer find in that source, after you confirm.
-- **Remove…:** makes Imagory forget the whole source and its thumbnails, after you confirm.
+- **Remove…:** makes Imagory forget the whole source and its thumbnails, after you confirm. Albums whose photos all came from that source are deleted too; the confirmation names them.
 
 Removing only affects Imagory's own database. **Your photos are never touched.**
 

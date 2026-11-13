@@ -113,17 +113,38 @@ def source_file_paths(conn: sqlite3.Connection, source_id: int, limit: int) -> l
     ]
 
 
+# Albums with a photo in this source and no photo with a file in any other source: removing
+# the source deletes every one of their photos, which would leave them empty.
+_EMPTIED_ALBUMS_SQL = (
+    "SELECT a.id, a.name FROM albums a "
+    "WHERE EXISTS (SELECT 1 FROM album_photos ap JOIN files f ON f.photo_id = ap.photo_id "
+    "WHERE ap.album_id = a.id AND f.source_id = ?) "
+    "AND NOT EXISTS (SELECT 1 FROM album_photos ap JOIN files f ON f.photo_id = ap.photo_id "
+    "WHERE ap.album_id = a.id AND f.source_id <> ?) "
+    "ORDER BY a.name COLLATE NOCASE, a.id"
+)
+
+
+def source_emptied_albums(conn: sqlite3.Connection, source_id: int) -> list[tuple[int, str]]:
+    """``(id, name)`` of the albums that removing this source leaves with no photos, so
+    :func:`delete_source` deletes them too. Albums that are already empty are not listed."""
+    return [(r[0], r[1]) for r in conn.execute(_EMPTIED_ALBUMS_SQL, (source_id, source_id))]
+
+
 def delete_source(conn: sqlite3.Connection, source_id: int) -> None:
-    """Delete a source with its files, scan runs, and photos left without files.
+    """Delete a source with its files, scan runs, photos left without files, and albums
+    left without photos (:func:`source_emptied_albums`).
 
     Photos that keep files in other sources get their primary file and date recomputed.
     Only ever called after the user confirms. Files on disk are not touched.
     """
     # Album memberships (PRD §8.8) go with the photos via ON DELETE CASCADE.
     with transaction(conn):
+        emptied = [a[0] for a in source_emptied_albums(conn, source_id)]
         photo_ids = _photo_ids_of(conn, "source_id = ?", (source_id,))
         conn.execute("DELETE FROM files WHERE source_id = ?", (source_id,))
         refresh_photos(conn, photo_ids)
+        conn.executemany("DELETE FROM albums WHERE id = ?", ((a,) for a in emptied))
         conn.execute("DELETE FROM scan_runs WHERE source_id = ?", (source_id,))
         conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
 

@@ -33,3 +33,12 @@ Short dated entries of what landed and the key facts behind it. Details live in 
   `.github/workflows/linux-build.yml`, Ubuntu 22.04 runner (glibc 2.35), `.tar.gz` artifact.
 - Release steps in `docs/tasks.md`; notes in `docs/release-notes-0.2.0.md`. Open: HEIC
   licence (PRD §18 question 2).
+
+## 2026-11-13: Remove source deletes the albums it empties
+
+- **Bug:** albums listed in the sidebar opened to no photos. Removing a source deleted its photos
+  and their memberships but not the albums, so re-adding the cleaned output left 28 empty albums
+  and imported the photos into `<name> (Takeout)` copies.
+- **Fix:** `db.delete_source` also deletes albums left with no photos (`source_emptied_albums`);
+  the confirmations name them. Allowed by PRD §3 because the action is confirmed; PRD §8.1, §16
+  and the site's sources page updated. Remove missing items is unchanged. Tests pass; ruff clean.

@@ -417,6 +417,30 @@ def test_remove_asks_first_and_says_files_are_kept(qtbot, photos, monkeypatch, n
     conn.close()
 
 
+def test_remove_source_deletes_and_names_the_albums_it_empties(
+    qtbot, photos, monkeypatch, no_dialogs
+):
+    window, conn = open_window(qtbot)
+    source = window.source_actions.add_source(photos, "Phone")
+    wait_scan(qtbot, window)
+    album_id = db.create_album(conn, "Trip")
+    db.add_photos_to_album(conn, album_id, [p.photo_id for p in window.photos])
+    window.show_album(next(a for a in db.list_albums(conn) if a.id == album_id))
+    asked = []
+
+    def answer(_parent, title, text, *args):
+        asked.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    window.source_actions.remove_source_interactive(source)
+    assert "The album “Trip” would be left empty and will be deleted too." in asked[0]
+    assert db.list_albums(conn) == []
+    assert window.album is None  # the album being shown went with the source
+    window.close()
+    conn.close()
+
+
 def test_sidebar_toggle_and_setting(qtbot, tmp_path, monkeypatch):
     monkeypatch.setenv("IMAGORY_LIBRARY", str(tmp_path / "lib"))
     window, conn = open_window(qtbot)
