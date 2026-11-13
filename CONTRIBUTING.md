@@ -1,50 +1,42 @@
 # Contributing to Imagory
 
-Thanks for your interest in Imagory. Bug reports, testing on real photo collections, and code
-are all welcome. This page explains how to report problems, set up a development copy, and get
-a change merged.
+Bug reports, testing on real photo collections, and code are all welcome.
 
 ## Reporting a bug
 
-Open a GitHub issue with:
+Open a [GitHub issue](https://github.com/Mshahnawaz1/Imagory/issues) with:
 
-- your Imagory version and your OS (Windows 10 or 11, or the Linux distro and version);
+- your Imagory version and OS (Windows 10/11, or Linux distro and version);
 - what you did, what you expected, and what happened;
-- the log files, if you can. **Help > Open log folder** opens them. Logs stay on your computer
-  until you attach them yourself.
+- the logs if you can (**Help > Open log folder**). They never leave your computer unless you
+  attach them.
 
-Please **don't attach your own photos** or Takeout files to an issue. If a particular file
-causes the problem, describe it instead: format, camera or phone, size, and file name pattern.
+**Don't attach your own photos or Takeout files.** Describe the file instead: format, camera
+or phone, size, and file name pattern. Reports from real Takeout exports (name quirks,
+unmatched sidecars, wrong dates) are especially useful.
 
-Feedback from real Google Takeout exports is especially useful. File name quirks, sidecar JSON
-that wasn't matched, and wrong dates all help tune the rules (PRD §18).
+## Ground rules
 
-## Before you write code
+A pull request that breaks one of these won't be merged.
 
-Imagory has a few rules that every change must follow. A pull request that breaks one won't be
-merged, however useful it is otherwise.
+1. **Never modify the user's photos.** Only read them. Never move, rename, edit, or delete
+   them, or write into a photo folder. (Clean up Takeout writes only to the output folder the
+   user picks.)
+2. **No network access.** No telemetry, update checks, crash reporting, or dependencies that
+   phone home.
+3. **Thumbnails are disposable.** They regenerate on demand; the database is the durable store.
+4. **Hide, never destroy.** Database rows are removed only by an action the user confirmed.
+5. **Permissive licences only.** The app is MIT. Dependencies must be MIT, BSD, Apache, or
+   LGPL. Don't copy code from GPL projects such as digiKam.
 
-1. **Never modify the user's photos.** Code may only read photo files. It must never move,
-   rename, edit, or delete them, or write anything into a photo folder. The only exception is
-   Clean up Takeout, which writes copies into an output folder the user picks.
-2. **No network access.** No telemetry, update checks, crash reporting, or remote calls of any
-   kind, and no dependencies that make them.
-3. **Thumbnails are disposable.** They must regenerate on demand. The database is the durable
-   store.
-4. **Hide, never destroy.** Database rows are removed only through an explicit action the user
-   has confirmed.
-5. **Permissive licences only.** The app is MIT. New dependencies must be MIT, BSD, Apache, or
-   LGPL, and must not phone home. Don't copy code from GPL projects such as digiKam.
+[PRD.md](PRD.md) is the source of truth for scope and design. For anything bigger than a bug
+fix, **open an issue first**. Face recognition, Takeout zips, portable mode, and a settings
+screen are out of scope for now (PRD §3, §14). Open work is in [docs/tasks.md](docs/tasks.md).
 
-[PRD.md](PRD.md) is the source of truth for scope, architecture, and the data model. For
-anything bigger than a bug fix, **open an issue first** to discuss it. Some features (faces,
-reading Takeout zips, portable mode, a settings screen) are deliberately out of scope for now
-(PRD §3, §14). Open work is listed in [docs/tasks.md](docs/tasks.md).
+## Setup
 
-## Development setup
-
-You need [uv](https://docs.astral.sh/uv/). It installs Python 3.12 if you don't have it.
-Development works on Windows and on Linux (including WSL). The main target is Windows 10/11.
+You need [uv](https://docs.astral.sh/uv/) (it installs Python 3.12). Windows and Linux,
+including WSL, both work; Windows 10/11 is the main target.
 
 ```sh
 git clone https://github.com/Mshahnawaz1/Imagory.git
@@ -52,101 +44,91 @@ cd Imagory
 uv sync
 ```
 
-### Running the app
-
-Always run against the **dev library** (`.dev-library` in the repo, git-ignored), so your
-real library is never touched. On Linux or WSL:
+Always run against a scratch library so your real one is never touched:
 
 ```sh
-scripts/dev_run.sh
+scripts/dev_run.sh                                                     # Linux / WSL
+$env:IMAGORY_LIBRARY = "$PWD\.dev-library"; uv run python -m imagory   # Windows PowerShell
 ```
 
-On Windows (PowerShell), from the repo folder:
-
-```powershell
-$env:IMAGORY_LIBRARY = "$PWD\.dev-library"; uv run python -m imagory
-```
-
-Then add your photo folders in the app with **Add a folder…**. Imagory only reads them. The
-dev library keeps its database, thumbnails, and logs between runs, so earlier scans are still
-there the next time you start the app. Delete `.dev-library` to start from an empty library.
-On WSL, the script also points Qt at WSLg's display.
-
-If you'd rather not use your own photos, generate fake ones and add that folder instead:
+The `.dev-library` folder is git-ignored and kept between runs; delete it to start fresh. To
+test without your own photos, generate fake ones and add that folder in the app:
 
 ```sh
 uv run python scripts/make_fake_library.py .fake-library --count 1000
 uv run python scripts/make_fake_library.py .fake-library-takeout --takeout --count 500
 ```
 
-To build the `.exe` or the Linux binary, see [docs/setup.md](docs/setup.md). Windows builds
-must be made on real Windows, not WSL.
+Building the `.exe` or the Linux binary is covered in [docs/setup.md](docs/setup.md). Windows
+builds must be made on real Windows, not WSL.
 
 ## Checks
 
-Run these before you open a pull request, and include the results in it.
+Run these before opening a pull request and include the results:
 
 ```sh
-uv run pytest -q
+uv run pytest -q                 # or scripts/test.sh unit|integration|ui
 uv run ruff check .
 uv run ruff format --check .     # `uv run ruff format .` fixes formatting
 ```
 
-On a headless Linux machine, set `QT_QPA_PLATFORM=offscreen` for the UI tests. The tests set
-`IMAGORY_LIBRARY` to a temporary folder themselves.
+On headless Linux, set `QT_QPA_PLATFORM=offscreen` for the UI tests. Tests set
+`IMAGORY_LIBRARY` themselves.
+
+### Benchmarks
+
+If a change could affect speed, run the relevant benchmark and quote the numbers:
+
+```sh
+uv run python scripts/make_fake_library.py .fake-library --count 100000
+IMAGORY_LIBRARY=.bench-library uv run python scripts/bench.py .fake-library   # scan
+uv run python scripts/bench_cleanup.py /path/to/scratch --count 50000         # Takeout cleanup
+uv run python scripts/bench_filters.py 100000                                 # search and filters
+uv run python scripts/grid_prototype.py --bench                               # grid scrolling
+```
+
+Earlier results are in [docs/archive/v0-results.md](docs/archive/v0-results.md).
 
 ## Writing code
 
-- **Layout.** `imagory/` has one module per job. All SQL lives in `imagory/db/` (one module per
-  area, re-exported from `imagory/db/__init__.py`). Cleanup code lives in `imagory/cleanup/`, and
-  the UI in `imagory/ui/`. [docs/architecture.md](docs/architecture.md) has a diagram.
-- **Threads.** The main thread runs only the Qt UI. During a scan, a single coordinator thread
-  is the only database writer. Worker processes read metadata and make thumbnails, return
-  plain picklable results, and never touch the database. The UI doesn't touch files or the
-  database directly during a scan (PRD §6.2).
-- **Robustness.** One bad image must never stop a scan. Log it, count it as an error, and
-  move on.
-- **Data conventions** (PRD §9). Paths are stored relative to the source root with `/`
-  separators. `modified_time` is integer nanoseconds. Local times are ISO 8601 with no offset,
-  and UTC times end in `Z`.
-- **Schema changes.** A schema change is a new numbered migration that runs in a transaction.
-  Never edit a migration that has been released. Update the data model in PRD.md in the same
-  change.
-- **Style.** Python 3.12, formatted with ruff (line length 100), type hints on public functions,
-  `pathlib` for paths, and `logging` instead of `print`. Prefer small pure functions that can be
-  tested without Qt.
-- **Words.** Use the terms in [GLOSSARY.md](GLOSSARY.md) (File, Photo, Primary file, Copy, …)
-  in code, UI text, and docs.
-- **Windows.** Keep Windows behaviour correct even when you develop on Linux: case-insensitive
-  paths, junctions, and `%LOCALAPPDATA%`. Avoid Windows-only code where a portable version
-  costs nothing.
+- **Layout:** one module per job in `imagory/`. All SQL is in `imagory/db/`, cleanup in
+  `imagory/cleanup/`, UI in `imagory/ui/`. See [docs/architecture.md](docs/architecture.md).
+- **Threads:** the main thread runs only the Qt UI. During a scan, one coordinator thread is
+  the only database writer; worker processes return plain picklable results and never touch
+  the database (PRD §6.2).
+- **Robustness:** one bad image must never stop a scan. Log it, count it, move on.
+- **Data** (PRD §9): paths relative to the source root with `/` separators, `modified_time` in
+  integer nanoseconds, local times ISO 8601 without offset, UTC times ending in `Z`.
+- **Schema changes:** add a new numbered migration (never edit a released one) and update the
+  data model in PRD.md.
+- **Style:** Python 3.12, ruff (line length 100), type hints on public functions, `pathlib`,
+  `logging` instead of `print`, small pure functions that test without Qt.
+- **Terms:** use the words in [GLOSSARY.md](GLOSSARY.md) in code, UI text, and docs.
+- **Windows:** keep case-insensitive paths, junctions, and `%LOCALAPPDATA%` correct even when
+  developing on Linux.
 
 ## Tests
 
-- Write tests with pytest. Generate fixtures in code. **Never commit real photos** or image
-  files.
+- pytest, with fixtures generated in code. **Never commit real photos** or image files.
 - Integration tests scan a generated folder into a temporary library (`tmp_path`).
-- Every scan integration test must also assert that **the source folder is unchanged**: same
-  files, sizes, and modified times, and no new files. `tests/fs_snapshot.py` helps with this.
+- Every scan integration test also asserts **the source folder is unchanged** (same files,
+  sizes, and mtimes, nothing new). `tests/fs_snapshot.py` helps.
 
 ## Commits and pull requests
 
-- Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`.
-  Types are `feat`, `fix`, `refactor`, `test`, `docs`, `build`, and `chore`. Scopes are module
-  names (`db`, `scanner`, `metadata`, `thumbs`, `ui`, `cleanup`, …) or `prd`. Example:
-  `fix(scanner): skip junctions on Windows`.
-- Keep each commit and pull request focused on one change.
-- In the pull request, give a short summary, the test results, any PRD impact, and which OS you
-  tested on. Say so if a change still needs checking on real Windows.
-- Keep the docs in step with your change. Update `PRD.md` (including the decisions log in §16)
-  when you change scope, architecture, the schema, or a decision. Update `README.md` when you
-  change user-facing behaviour or setup. Add a new domain term to `GLOSSARY.md`.
+- [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, for
+  example `fix(scanner): skip junctions on Windows`. Types: `feat`, `fix`, `refactor`, `test`,
+  `docs`, `build`, `chore`. Scopes: module names (`db`, `scanner`, `ui`, `cleanup`, …) or `prd`.
+- Keep each commit and pull request to one change.
+- In the pull request, give a summary, test results, any PRD impact, and the OS you tested on.
+  Say if it still needs checking on real Windows.
+- Keep docs in step: `PRD.md` (and its §16 decisions log) for scope, architecture, schema, or
+  decisions; `README.md` for user-facing behaviour or setup; `GLOSSARY.md` for new terms.
 
-AI coding assistants are fine to use. [CLAUDE.md](CLAUDE.md) holds the same rules in a form
-written for them. You are still responsible for reading, testing, and understanding what you
-submit.
+AI coding assistants are fine; [CLAUDE.md](CLAUDE.md) has the same rules written for them. You
+are still responsible for understanding and testing what you submit.
 
 ## Licence
 
-By contributing, you agree that your contributions are licensed under the project's
+By contributing, you agree that your contributions are licensed under the
 [MIT licence](LICENSE).
