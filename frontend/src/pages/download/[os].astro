@@ -1,14 +1,14 @@
 ---
 import Base from "../../layouts/Base.astro";
 import Icon from "../../components/Icon.astro";
-import { downloads, release, fileUrl, links, downloadPage, type Os } from "../../site";
+import { downloads, release, latestRelease, links, downloadPage, type Os } from "../../site";
 
 export function getStaticPaths() {
   return (["windows", "linux"] as Os[]).map((os) => ({ params: { os } }));
 }
 const os = Astro.params.os as Os;
 const d = downloads[os];
-const url = fileUrl(os);
+const url = latestRelease;
 const other: Os = os === "windows" ? "linux" : "windows";
 ---
 <Base title="Thanks for downloading" description={`Download Imagory for ${d.label}.`} noindex>
@@ -17,7 +17,7 @@ const other: Os = os === "windows" ? "linux" : "windows";
     <div class="prose">
       <p class="eyebrow">Imagory for {d.label}</p>
       <h1>Thanks for downloading Imagory</h1>
-      <p class="lead">Your download should start in a moment.</p>
+      <p class="lead">Taking you to the latest release on GitHub. Under <strong>Assets</strong>, download the file below.</p>
 
       <div class="card file">
         <div class="icon-box"><Icon name={os} /></div>
@@ -27,20 +27,20 @@ const other: Os = os === "windows" ? "linux" : "windows";
         </div>
       </div>
 
-      <p><a class="btn btn-primary btn-lg" href={url}><Icon name="download" />Download didn't start? Click here</a></p>
+      <p><a class="btn btn-primary btn-lg" href={url}><Icon name="download" />Not redirected? Open the latest release</a></p>
       <p><a href={links.releases}>All releases</a></p>
 
       <h2>Next steps</h2>
       {os === "windows" ? (
         <ol>
-          <li>Double-click <code>Imagory.exe</code>. There is no installer.</li>
+          <li>Download <code>Imagory.exe</code> from the release, then double-click it. There is no installer.</li>
           <li>If Windows SmartScreen warns you, choose <strong>More info</strong>, then <strong>Run anyway</strong>. <a href="/docs/windows-warnings">Why this happens</a>.</li>
           <li>Add a photo folder and let Imagory scan it.</li>
         </ol>
       ) : (
         <>
           <ol>
-            <li>Unpack the archive.</li>
+            <li>Download the <code>.tar.gz</code> from the release and unpack it.</li>
             <li>Run the app.</li>
             <li>If it does not start, install the Qt library <code>libxcb-cursor0</code>.</li>
           </ol>

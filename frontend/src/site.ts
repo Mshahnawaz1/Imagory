@@ -4,9 +4,9 @@
 export const repo = "https://github.com/Mshahnawaz1/imagory";
 
 export const release = {
-  version: "0.2.0",
-  tag: "v0.2.0", // must match the GitHub release tag
-  date: "2026-11-12",
+  version: "0.2.1",
+  tag: "v0.2.1", // must match the GitHub release tag
+  date: "2026-11-13",
 };
 
 export type Os = "windows" | "linux";
@@ -25,13 +25,12 @@ export const downloads: Record<
     label: "Linux",
     file: `Imagory-${release.version}-linux-x86_64.tar.gz`,
     requirements: "x86_64, Ubuntu 22.04 or newer, X11 or XWayland",
-    size: "about 50 MB",
+    size: "about 70 MB",
   },
 };
 
-/** Direct link to a release file on GitHub. */
-export const fileUrl = (os: Os) =>
-  `${repo}/releases/download/${release.tag}/${downloads[os].file}`;
+/** The latest published (non-pre-release) GitHub release, where every download goes. */
+export const latestRelease = `${repo}/releases/latest`;
 
 /** The site's own download page, which counts the download and then starts it. */
 export const downloadPage = (os: Os) => `/download/${os}`;
