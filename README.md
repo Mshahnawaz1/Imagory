@@ -165,8 +165,8 @@ Download `Imagory-<version>-linux-x86_64.tar.gz` from the
 [releases page](https://github.com/Mshahnawaz1/Imagory/releases), then:
 
 ```sh
-tar -xzf Imagory-0.2.0-linux-x86_64.tar.gz
-./Imagory-0.2.0-linux-x86_64/Imagory
+tar -xzf Imagory-0.2.1-linux-x86_64.tar.gz
+./Imagory-0.2.1-linux-x86_64/Imagory
 ```
 
 - Runs on Ubuntu 22.04 or newer (x86_64) and other distros of the same age.
