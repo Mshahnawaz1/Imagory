@@ -94,10 +94,10 @@ class AddSourceDialog(QDialog):
         # into the library through a cleanup (PRD §8.10).
         self.clean_radio = QRadioButton("Clean up first (recommended)", self)
         self.clean_note = QLabel(
-            "Makes a cleaned copy in new folder: Removes duplicates; Each photo maintain their original metadata."
+            "Makes a cleaned copy in new folder: Removes duplicates;"
+            "Each photo maintain their original metadata."
             "The copy needs about as much free"
-            "space as this folder and takes longer than a scan; the cleanup shows the exact "
-            "size before copying.",
+            "space as this folder and takes longer than a scan.",
             self,
         )
         self.clean_note.setWordWrap(True)
