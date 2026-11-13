@@ -265,6 +265,30 @@ def test_add_source_dialog_shows_detection(qtbot, tmp_path):
     assert dialog.source_type == "plain"
 
 
+def test_add_source_dialog_offers_cleanup_for_takeout(qtbot, tmp_path):
+    from imagory.takeout import Detection
+    from imagory.ui.sources_dialog import AddSourceDialog
+
+    dialog = AddSourceDialog(tmp_path / "Takeout", Detection("takeout", "It contains a folder."))
+    qtbot.addWidget(dialog)
+    assert not dialog.choice.isHidden()
+    assert dialog.clean_up_first  # the default for a Takeout folder
+    assert dialog.ok_button.text() == "Continue to cleanup"
+    dialog.as_is_radio.setChecked(True)
+    assert not dialog.clean_up_first
+    assert dialog.ok_button.text() == "Add and scan"
+    dialog.clean_radio.setChecked(True)
+    dialog.type_combo.setCurrentIndex(0)  # plain: nothing to clean up
+    assert dialog.choice.isHidden()
+    assert not dialog.clean_up_first
+    assert dialog.ok_button.text() == "Add and scan"
+
+    plain = AddSourceDialog(tmp_path / "Phone", Detection("plain", "No sidecars."))
+    qtbot.addWidget(plain)
+    assert plain.choice.isHidden() and not plain.clean_up_first
+    assert plain.ok_button.text() == "Add and scan"
+
+
 def test_cancel_scan_from_ui(qtbot, tmp_path, no_dialogs):
     src = tmp_path / "many"
     for i in range(60):

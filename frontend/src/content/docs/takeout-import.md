@@ -13,6 +13,7 @@ Google Takeout lets you download your Google Photos. Imagory can browse the expo
 2. Download the zip files when Google says they are ready.
 3. **Extract all the zip files** into one folder. Imagory cannot read zip files yet, so they must be extracted first.
 4. In Imagory, choose **Add source…** and pick that folder. See [Sources](/docs/sources).
+5. Keep **Clean up first** selected to get a tidy copy with your albums, or choose **Add as is** to browse the export directly (albums are not brought in that way).
 
 ## What Imagory reads
 

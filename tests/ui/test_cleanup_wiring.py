@@ -140,6 +140,7 @@ def test_full_run_and_add_to_library(window, takeout, qtbot, tmp_path, dialogs):
     assert paths.cleanup_db_path(out).is_file()
     assert win.cleanup._run_id is not None
     assert not wiz.swap_button.isVisible()  # the input isn't a library source
+    assert wiz.add_button.isEnabled() and not win.scanning  # waits for the user
 
     wiz.add_button.click()
     assert win.scanning
@@ -151,6 +152,76 @@ def test_full_run_and_add_to_library(window, takeout, qtbot, tmp_path, dialogs):
     assert ALBUM_TITLE in [a.name for a in db.list_albums(win.conn)]
     assert not dialogs[0]["question"]  # no old source, so no swap offer
     assert_unchanged(takeout, before)
+
+
+def test_add_source_clean_up_first_adds_the_output(window, takeout, qtbot, tmp_path, dialogs):
+    """Add source's "Clean up first": the wizard opens on the output page with the Takeout
+    as input, and the finished output is added as a cleaned source with its albums."""
+    from PySide6.QtWidgets import QDialog
+
+    from imagory.ui import sources_dialog
+
+    win = window
+    out = tmp_path / "out"
+    before = snapshot(takeout)
+    win.source_actions._pick_folder = lambda *a, **k: takeout
+    seen = []
+
+    def accept(dialog):
+        seen.append((dialog.source_type, dialog.clean_up_first, dialog.ok_button.text()))
+        dialog.label_edit.setText("Family Takeout")
+        return QDialog.DialogCode.Accepted
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(sources_dialog.AddSourceDialog, "exec", accept)
+    try:
+        win.source_actions.add_source_interactive()
+    finally:
+        monkey.undo()
+    assert seen == [("takeout", True, "Continue to cleanup")]
+    assert not win.sources  # the Takeout itself is not added
+    wiz = win.cleanup.wizard
+    assert wiz is not None and wiz.page == cw.PAGE_OUTPUT
+    assert wiz.input_path_label.text() == str(takeout)
+
+    wiz.set_output(out)
+    wiz.output_next.click()
+    qtbot.waitUntil(lambda: wiz.page == cw.PAGE_PREVIEW, timeout=WAIT)
+    wiz.preview_start.click()
+    qtbot.waitUntil(lambda: wiz.page == cw.PAGE_DONE or wiz._failed, timeout=WAIT)
+    assert wiz.page == cw.PAGE_DONE, wiz.copy_status.text()
+    qtbot.waitUntil(lambda: bool(win.sources), timeout=WAIT)  # added without a click
+    assert not wiz.add_button.isEnabled()
+    wait_scan(win, qtbot)
+    assert [(s.type, s.label) for s in win.sources] == [("cleaned", "Family Takeout")]
+    assert ALBUM_TITLE in [a.name for a in db.list_albums(win.conn)]
+    assert len(win.photos) > 0
+    assert not dialogs[0]["warning"]
+    assert_unchanged(takeout, before)
+
+
+def test_add_source_as_is_scans_the_takeout(window, takeout, qtbot):
+    from PySide6.QtWidgets import QDialog
+
+    from imagory.ui import sources_dialog
+
+    win = window
+    win.source_actions._pick_folder = lambda *a, **k: takeout
+
+    def accept(dialog):
+        dialog.as_is_radio.setChecked(True)
+        assert dialog.ok_button.text() == "Add and scan"
+        return QDialog.DialogCode.Accepted
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(sources_dialog.AddSourceDialog, "exec", accept)
+    try:
+        win.source_actions.add_source_interactive()
+    finally:
+        monkey.undo()
+    assert win.cleanup.wizard is None
+    wait_scan(win, qtbot)
+    assert [s.type for s in win.sources] == ["takeout"]
 
 
 def test_plain_add_source_of_output_imports_albums(window, takeout, qtbot, tmp_path):

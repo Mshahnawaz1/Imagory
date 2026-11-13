@@ -104,8 +104,9 @@ cancelled at any time, and carry on where they stopped.
 
 Leaving Google Photos? Download your export from
 [takeout.google.com](https://takeout.google.com), **extract the zip files** (Imagory doesn't
-read zips yet), then either add the folder as a source or run **Clean up Takeout…** first to
-get a tidy copy. See [Cleaning up a Google Takeout export](#cleaning-up-a-google-takeout-export).
+read zips yet), then add the folder. Imagory offers to clean it up first (the default), which
+makes a tidy copy with your Google Photos albums and adds that to your library, or to add it
+as is. See [Cleaning up a Google Takeout export](#cleaning-up-a-google-takeout-export).
 
 Supported formats: JPEG, PNG, GIF (first frame), and HEIC/HEIF. Videos are not shown in the
 grid yet, but **Clean up Takeout** copies them safely along with your photos.

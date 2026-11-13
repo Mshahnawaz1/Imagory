@@ -74,7 +74,10 @@ class SourceActions:
         detection = sources.detect_source_type(folder)
         dialog = AddSourceDialog(folder, detection, self.window)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.add_source(folder, dialog.label, dialog.source_type, detection.type)
+            if dialog.clean_up_first:
+                self.window.cleanup.clean_up_and_add(folder, dialog.label)
+            else:
+                self.add_source(folder, dialog.label, dialog.source_type, detection.type)
         dialog.deleteLater()
 
     def add_source(

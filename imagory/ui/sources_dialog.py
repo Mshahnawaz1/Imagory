@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -88,22 +89,50 @@ class AddSourceDialog(QDialog):
         form.addRow("", detected)
         note = QLabel("Imagory only reads this folder. Your photos are never changed.", self)
         note.setWordWrap(True)
-        buttons = QDialogButtonBox(
+
+        # A Takeout folder is cleaned up first by default (PRD §8.1): its albums only come
+        # into the library through a cleanup (PRD §8.10).
+        self.clean_radio = QRadioButton("Clean up first (recommended)", self)
+        self.clean_note = QLabel(
+            "Makes a cleaned copy in new folder: Removes duplicates; Each photo maintain their original metadata."
+            "The copy needs about as much free"
+            "space as this folder and takes longer than a scan; the cleanup shows the exact "
+            "size before copying.",
+            self,
+        )
+        self.clean_note.setWordWrap(True)
+        self.clean_note.setContentsMargins(22, 0, 0, 4)  # under its radio button
+        self.as_is_radio = QRadioButton("Add as is (scan this folder, no albums)", self)
+        self.clean_radio.setChecked(True)
+        self.choice = QWidget(self)
+        choice_box = QVBoxLayout(self.choice)
+        choice_box.setContentsMargins(0, 0, 0, 0)
+        choice_box.addWidget(self.clean_radio)
+        choice_box.addWidget(self.clean_note)
+        choice_box.addWidget(self.as_is_radio)
+
+        self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Add and scan")
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
+        self.ok_button = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.buttons.accepted.connect(self._accept)
+        self.buttons.rejected.connect(self.reject)
         self.label_edit.textChanged.connect(
-            lambda text: buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(
-                bool(text.strip())
-            )
+            lambda text: self.ok_button.setEnabled(bool(text.strip()))
         )
+        self.type_combo.currentIndexChanged.connect(self._update_choice)
+        self.clean_radio.toggled.connect(self._update_choice)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(self.choice)
         layout.addWidget(note)
-        layout.addWidget(buttons)
+        layout.addWidget(self.buttons)
+        self._update_choice()
         self.resize(520, self.sizeHint().height())
+
+    def _update_choice(self) -> None:
+        self.choice.setVisible(self.source_type == "takeout")
+        self.ok_button.setText("Continue to cleanup" if self.clean_up_first else "Add and scan")
 
     def _accept(self) -> None:
         if self.label:
@@ -116,6 +145,11 @@ class AddSourceDialog(QDialog):
     @property
     def source_type(self) -> str:
         return self.fixed_type or self.type_combo.value
+
+    @property
+    def clean_up_first(self) -> bool:
+        """True when the user chose to clean up this Takeout folder instead of adding it."""
+        return self.source_type == "takeout" and self.clean_radio.isChecked()
 
 
 class SourcesDialog(QDialog):

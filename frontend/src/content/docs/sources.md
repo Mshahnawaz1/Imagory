@@ -13,6 +13,11 @@ Choose **Add source…** from the toolbar or the File menu (on an empty library,
 
 You can add ordinary photo folders and **extracted** Google Takeout exports. Zip files from Google must be extracted first (see [Takeout import](/docs/takeout-import)).
 
+For a Takeout export, Imagory offers two choices:
+
+- **Clean up first (recommended):** Imagory makes a tidy copy in a folder you choose and adds that copy to your library, with your Google Photos albums. The copy needs about as much free space as the export. See [Takeout cleanup](/docs/takeout-cleanup).
+- **Add as is:** Imagory scans the export itself. This is quicker and needs no extra space, but albums are not brought in.
+
 ## Source types
 
 Imagory shows what it thinks the folder is, and you can change it.

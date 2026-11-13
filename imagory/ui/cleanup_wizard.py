@@ -179,6 +179,13 @@ class CleanupWizard(QWidget):
         self.input_next.setEnabled(True)
         self._refresh_output()
 
+    def start_with_input(self, folder: Path) -> None:
+        """Take ``folder`` as the input and open the output page (Add source's "Clean up
+        first", which already chose the folder)."""
+        self._failed = False
+        self.set_input(folder)
+        self._stack.setCurrentIndex(PAGE_OUTPUT)
+
     # -- page 2: output --------------------------------------------------------------------
     def _build_output(self) -> None:
         box = self._add_page("2. Choose the output folder")
@@ -360,7 +367,7 @@ class CleanupWizard(QWidget):
         self.open_report_button = QPushButton("Open report")
         self.open_report_button.clicked.connect(self._open_report)
         self.add_button = self._primary("Add to library")
-        self.add_button.clicked.connect(self._add_to_library)
+        self.add_button.clicked.connect(self.add_to_library)
         box.addWidget(self.done_summary)
         box.addWidget(self.done_details)
         box.addWidget(self.swap_label)
@@ -404,7 +411,9 @@ class CleanupWizard(QWidget):
         if self._done:
             self.open_report_requested.emit(self._done.report_path)
 
-    def _add_to_library(self) -> None:
+    def add_to_library(self) -> None:
+        """Add to library, as its button does (called directly when the cleanup was started
+        from Add source)."""
         self.add_button.setEnabled(False)
         self.add_to_library_requested.emit()
         if self._done and self._done.input_is_source:

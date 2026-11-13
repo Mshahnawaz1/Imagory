@@ -53,6 +53,10 @@ class CleanupController:
         # (job, input, output, wizard): a job asked for while the last one is ending
         self._queued: tuple | None = None
         self._swap_context: CleanedAdd | None = None
+        # (Takeout folder, label) from Add source's "Clean up first": a finished run of that
+        # input is added to the library straight away, under that label.
+        self._from_add_source: tuple[Path, str] | None = None
+        self._auto_add: CleanupWizard | None = None  # added once its job's thread has ended
 
     def stop(self) -> None:
         """Cancel a running cleanup job and wait for it (the window is closing)."""
@@ -101,12 +105,38 @@ class CleanupController:
         self.wizard = wizard
         wizard.show()
 
+    def clean_up_and_add(self, folder: Path, label: str) -> None:
+        """Add source's "Clean up first" for a Takeout folder: open the wizard with ``folder``
+        as input, on the output page. When the run is done, the output is added to the
+        library as a ``cleaned`` source called ``label``, so its albums come in."""
+        if self.wizard is not None and (self.window.cleaning or self.wizard.working):
+            QMessageBox.information(
+                self.window,
+                "Clean up Takeout",
+                "A cleanup is already running. Let it finish, then add this folder again.",
+            )
+            self.open_wizard()
+            return
+        self.open_wizard()
+        if self.wizard is None:  # a scan is running
+            return
+        self._from_add_source = (folder, label)
+        self.wizard.start_with_input(folder)
+
+    def _added_from_source(self, input_root: Path | None) -> tuple[Path, str] | None:
+        """The Add source request this run answers, if its input is that folder."""
+        pending = self._from_add_source
+        if pending is None or input_root is None or Path(input_root) != pending[0]:
+            return None
+        return pending
+
     @staticmethod
     def _open_folder(path: Path) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _on_wizard_destroyed(self, *_args) -> None:
         self.wizard = None
+        self._from_add_source = None
 
     def _start_thread(
         self, job, input_root: Path, output_root: Path, wizard: CleanupWizard | None
@@ -180,6 +210,8 @@ class CleanupController:
         self._input, self._output = input_root, output_root
         self._run_id = run_id
         wizard.show_done(result)
+        if self._added_from_source(input_root) is not None:
+            self._auto_add = wizard  # the user already asked for it in Add source
 
     def _on_thread_finished(self) -> None:
         if self.thread is not None:
@@ -192,6 +224,15 @@ class CleanupController:
                 self._start_thread(job, input_root, output_root, wizard)
         self.window.update_actions()
         self.window.scan_state_changed.emit()
+        auto_add, self._auto_add = self._auto_add, None
+        if (
+            auto_add is not None
+            and shiboken6.isValid(auto_add)
+            and auto_add is self.wizard
+            and self.thread is None
+            and not self.window.closing
+        ):
+            auto_add.add_to_library()
 
     def _add_to_library(self) -> None:
         """Add to library: the output becomes a ``cleaned`` source and is scanned; then its
@@ -207,8 +248,12 @@ class CleanupController:
             existing is None or existing.type != "cleaned"
         ) and not self.window.source_actions.check_folder(output):
             self._refuse_add(None)  # the usual overlap warning was shown or declined
-        elif self.add_cleaned_output(output, run_id, self._input) is None:
-            self._refuse_add(None)
+        else:
+            pending = self._added_from_source(self._input)
+            self._from_add_source = None
+            label = pending[1] if pending is not None else None
+            if self.add_cleaned_output(output, run_id, self._input, label) is None:
+                self._refuse_add(None)
 
     def _refuse_add(self, message: str | None) -> None:
         if message:

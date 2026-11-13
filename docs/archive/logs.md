@@ -42,3 +42,12 @@ Short dated entries of what landed and the key facts behind it. Details live in 
 - **Fix:** `db.delete_source` also deletes albums left with no photos (`source_emptied_albums`);
   the confirmations name them. Allowed by PRD §3 because the action is confirmed; PRD §8.1, §16
   and the site's sources page updated. Remove missing items is unchanged. Tests pass; ruff clean.
+
+## 2026-11-13: Add source offers Clean up first for Takeout
+
+- **Problem:** a raw Takeout scan creates no albums (PRD §8.3), so albums only appeared after a
+  cleanup; before the remove-source fix, leftover albums from an earlier cleaned source hid this.
+- **Change:** Add source on a Takeout folder offers **Clean up first** (default) or **Add as is**.
+  Clean up first opens the wizard on the output page with the folder as input and runs Add to
+  library by itself once the copy's thread has ended, under the Add source label. Creating albums
+  on a raw scan was considered and rejected (PRD §16). PRD §8.1, §8.10, docs and site updated.

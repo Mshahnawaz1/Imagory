@@ -22,7 +22,7 @@ Videos and other files are copied too. The Trash folder is not copied, but it is
 ## Steps
 
 1. Extract your Takeout zip files into one folder first.
-2. Choose **Clean up Takeout…**, then pick the extracted export (the input) and an empty output folder.
+2. Choose **Clean up Takeout…**, then pick the extracted export (the input) and an empty output folder. Or choose **Add source…**, pick the export and keep **Clean up first**: Imagory skips straight to the output folder and adds the copy to your library when it is done.
 3. Imagory analyses the export and shows what it would copy: how many unique photos, how many duplicates, and how much disk space it needs (about the size of the photos plus 5%). Nothing has been copied yet.
 4. Click **Start copying**. Every copy is checked against the original before it counts as done.
 

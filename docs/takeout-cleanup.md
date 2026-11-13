@@ -155,7 +155,10 @@ sidecars and are untrusted text, so the JSON is written with escaping, never bui
 ## UI
 
 The entry point is a toolbar ("header") button **Clean up Takeout…** next to Add source, plus the
-same action in the File menu. It opens a non-modal wizard window, so the grid stays usable. Closing
+same action in the File menu. Add source on a Takeout folder also offers **Clean up first** (the
+default) next to **Add as is**: the wizard then opens on the output page with that folder as the
+input, and Add to library runs by itself when the run is done (the source gets the Add source
+label). It opens a non-modal wizard window, so the grid stays usable. Closing
 the window while work is running asks whether to cancel.
 
 1. **Input:** choose the Takeout folder. Shows the detected type, or a warning if it isn't
